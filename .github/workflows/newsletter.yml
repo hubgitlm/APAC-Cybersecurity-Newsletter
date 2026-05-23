@@ -1,0 +1,70 @@
+name: APAC Cybersecurity Newsletter
+
+on:
+  # ── Scheduled: 2nd of every month at 06:00 UTC ────────────────────────────
+  # (Runs after the 1st so the previous month's news has time to be indexed)
+  schedule:
+    - cron: "0 6 2 * *"
+
+  # ── Manual trigger from GitHub Actions UI ─────────────────────────────────
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — generate HTML but do not send email"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  send-newsletter:
+    name: Generate & Send Newsletter
+    runs-on: ubuntu-latest
+    timeout-minutes: 60        # Claude + 12 web-search rounds can take ~20 min
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python ────────────────────────────────────────────────────────
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # ── 3. Dependencies ──────────────────────────────────────────────────
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. Generate only (dry run) ───────────────────────────────────────
+      - name: Generate newsletter (dry run)
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_USER:        ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RECIPIENTS:        ${{ secrets.RECIPIENTS }}
+        run: python main.py --dry-run
+
+      # ── 5. Generate & send ───────────────────────────────────────────────
+      - name: Generate and send newsletter
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GMAIL_USER:         ${{ secrets.GMAIL_USER }}
+          RECIPIENTS:         ${{ secrets.RECIPIENTS }}
+        run: python main.py
+
+      # ── 6. Upload generated HTML as artifact (90-day retention) ──────────
+      - name: Upload newsletter HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: newsletter-${{ github.run_id }}
+          path: newsletter_*.html
+          retention-days: 90
