@@ -1,0 +1,18 @@
+# Secrets — never commit these
+.env
+
+# Generated newsletters (uploaded as Actions artifacts instead)
+newsletter_*.html
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
