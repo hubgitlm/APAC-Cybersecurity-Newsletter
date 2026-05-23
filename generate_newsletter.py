@@ -14,18 +14,18 @@ from email_template import build_html, build_plain_text
 
 # ── Countries & display config ──────────────────────────────────────────────
 COUNTRIES = [
-    {"name": "Singapore",    "flag": "🇸🇬", "code": "SG"},
-    {"name": "Hong Kong",    "flag": "🇭🇰", "code": "HK"},
-    {"name": "China",        "flag": "🇨🇳", "code": "CN"},
-    {"name": "India",        "flag": "🇮🇳", "code": "IN"},
-    {"name": "Philippines",  "flag": "🇵🇭", "code": "PH"},
-    {"name": "Vietnam",      "flag": "🇻🇳", "code": "VN"},
-    {"name": "Malaysia",     "flag": "🇲🇾", "code": "MY"},
     {"name": "Australia",    "flag": "🇦🇺", "code": "AU"},
-    {"name": "South Korea",  "flag": "🇰🇷", "code": "KR"},
+    {"name": "China",        "flag": "🇨🇳", "code": "CN"},
+    {"name": "Hong Kong",    "flag": "🇭🇰", "code": "HK"},
+    {"name": "India",        "flag": "🇮🇳", "code": "IN"},
     {"name": "Indonesia",    "flag": "🇮🇩", "code": "ID"},
     {"name": "Japan",        "flag": "🇯🇵", "code": "JP"},
+    {"name": "Malaysia",     "flag": "🇲🇾", "code": "MY"},
+    {"name": "Philippines",  "flag": "🇵🇭", "code": "PH"},
+    {"name": "Singapore",    "flag": "🇸🇬", "code": "SG"},
+    {"name": "South Korea",  "flag": "🇰🇷", "code": "KR"},
     {"name": "Taiwan",       "flag": "🇹🇼", "code": "TW"},
+    {"name": "Vietnam",      "flag": "🇻🇳", "code": "VN"},
 ]
 
 # Seconds to wait between countries (respects 30k tokens/min limit)
@@ -40,6 +40,15 @@ Your writing style:
 - Factual: cite incident names, affected organisations, dates, and CVE numbers where known
 - Balanced: cover both public/private sector incidents
 - Actionable: always end with a practical takeaway
+
+OUTPUT RULES — these are absolute:
+- Your response must begin IMMEDIATELY with <h3>Executive Summary</h3> — no other text before it.
+- Never narrate your research process. Do not write phrases like "I'll search for...",
+  "Let me look up...", "I'll run searches...", "I'm going to search...", "Searching for...",
+  "Based on my searches...", "I'll run all five searches...", or any commentary about what you are doing.
+- Do not write any preamble, introduction, or explanation before the HTML content.
+- Do not write any closing remarks, summaries, or notes after the HTML content.
+- Output ONLY the six HTML sections, nothing else.
 
 When you write HTML, use ONLY these tags (no inline styles, no classes):
 <h3>, <h4>, <p>, <ul>, <li>, <strong>, <em>, <a href="...">, <hr>
@@ -125,7 +134,8 @@ def research_country(client: anthropic.Anthropic, country: dict, month: str, yea
         text_parts = [b.text for b in response.content if b.type == "text" and b.text.strip()]
 
         if response.stop_reason == "end_turn":
-            return "\n".join(text_parts) if text_parts else _fallback(country["name"], month, year)
+            raw = "\n".join(text_parts) if text_parts else ""
+            return _strip_preamble(raw) or _fallback(country["name"], month, year)
 
         messages.append({"role": "assistant", "content": response.content})
         tool_results = [
@@ -140,9 +150,23 @@ def research_country(client: anthropic.Anthropic, country: dict, month: str, yea
         if tool_results:
             messages.append({"role": "user", "content": tool_results})
         else:
-            return "\n".join(text_parts) if text_parts else _fallback(country["name"], month, year)
+            raw = "\n".join(text_parts) if text_parts else ""
+            return _strip_preamble(raw) or _fallback(country["name"], month, year)
 
     return _fallback(country["name"], month, year)
+
+
+def _strip_preamble(text: str) -> str:
+    """
+    Safety net: removes any AI narration that appears before the first <h3> tag.
+    The system prompt instructs Claude not to produce this, but this catches anything
+    that slips through (e.g. "I'll run all five searches simultaneously...").
+    """
+    import re
+    match = re.search(r"<h3", text, re.IGNORECASE)
+    if match:
+        return text[match.start():]
+    return text.strip()
 
 
 def _fallback(country: str, month: str, year: int) -> str:

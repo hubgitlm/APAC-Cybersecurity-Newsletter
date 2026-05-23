@@ -44,6 +44,7 @@ def build_html(month: str, year: int, sections: list, generated_at: str) -> str:
       font-size:15px;
       line-height:1.7;
       -webkit-text-size-adjust:100%;
+      scroll-behavior:smooth;
     }}
     a {{color:{ACCENT};}}
     h3 {{color:{ACCENT};font-size:14px;font-weight:700;letter-spacing:.06em;
@@ -72,6 +73,7 @@ def build_html(month: str, year: int, sections: list, generated_at: str) -> str:
     .country-card {{
       background:{CARD_BG};border:1px solid {BORDER};border-radius:10px;
       padding:28px 32px;margin-bottom:20px;
+      scroll-margin-top:16px;
     }}
     .country-header {{display:flex;align-items:center;gap:10px;margin-bottom:18px;
                       padding-bottom:14px;border-bottom:2px solid {ACCENT};}}
