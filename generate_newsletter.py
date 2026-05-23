@@ -158,7 +158,7 @@ def generate_newsletter(month: str, year: int):
 
         # Polite pacing — avoid burst rate limits
         if i < total:
-            time.sleep(2)
+            time.sleep(30)
 
     generated_at = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
     html       = build_html(month, year, sections, generated_at)
