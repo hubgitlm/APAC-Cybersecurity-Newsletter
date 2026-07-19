@@ -22,7 +22,7 @@ jobs:
   send-newsletter:
     name: Generate & Send Newsletter
     runs-on: ubuntu-latest
-    timeout-minutes: 60        # Claude + 12 web-search rounds can take ~20 min
+    timeout-minutes: 60        # 12 countries + 1 regional synthesis call; generous buffer for retries
 
     steps:
       # ── 1. Checkout ──────────────────────────────────────────────────────
