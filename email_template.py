@@ -25,6 +25,10 @@ ACCENT    = "#58a6ff"
 TEXT_MAIN = "#e6edf3"
 TEXT_MUTED = "#8b949e"
 
+# Regional Briefing accent — sets the lead synthesis section apart from the
+# blue country cards so it visually reads as "the big picture" up top.
+REGIONAL_ACCENT = "#f0b429"
+
 
 # ── Inline-style constants (reused across elements) ──────────────────────────
 _BODY_STYLE = (
@@ -114,6 +118,22 @@ _FOOTER_STYLE = (
     f"text-align:center;padding:24px 0;color:{TEXT_MUTED};font-size:12px;"
 )
 
+# ── Regional Briefing (lead section) card/badge styles ──────────────────────
+_REGIONAL_CARD_STYLE = (
+    f"background-color:{CARD_BG};"
+    f"border:1px solid {REGIONAL_ACCENT};"
+    "border-radius:10px;"
+    "padding:28px 32px;"
+    "margin-bottom:28px;"
+)
+
+_REGIONAL_BADGE_STYLE = (
+    f"display:inline-block;background-color:{REGIONAL_ACCENT};color:#000000;"
+    "font-size:11px;font-weight:800;letter-spacing:.1em;"
+    "text-transform:uppercase;padding:3px 10px;"
+    "border-radius:4px;margin-bottom:14px;"
+)
+
 # ── Inline styles injected into Claude-generated content ────────────────────
 # Claude writes bare <h3>, <p>, <ul>, <li> etc.  We post-process these to add
 # inline styles so they survive <style>-stripping email clients.
@@ -149,8 +169,20 @@ _TAG_STYLES = {
     ),
 }
 
+# Same tag styles, but with the amber regional accent on <h3> so the Regional
+# Briefing section reads as visually distinct from the blue country cards.
+_REGIONAL_TAG_STYLES = {
+    **_TAG_STYLES,
+    "h3": (
+        f"color:{REGIONAL_ACCENT};font-size:14px;font-weight:700;"
+        "letter-spacing:.06em;text-transform:uppercase;"
+        f"margin:22px 0 6px 0;padding-bottom:4px;"
+        f"border-bottom:1px solid {BORDER};"
+    ),
+}
 
-def _inject_inline_styles(html_fragment: str) -> str:
+
+def _inject_inline_styles(html_fragment: str, tag_styles: dict = _TAG_STYLES) -> str:
     """
     Post-processes Claude's HTML output and adds inline styles to bare tags.
     Skips tags that already carry a style attribute.
@@ -158,19 +190,19 @@ def _inject_inline_styles(html_fragment: str) -> str:
     def replacer(m: re.Match) -> str:
         tag = m.group(1).lower()
         attrs = m.group(2)
-        if tag not in _TAG_STYLES:
+        if tag not in tag_styles:
             return m.group(0)
         # Don't double-up if Claude already added a style attr
         if 'style=' in attrs.lower():
             return m.group(0)
-        return f"<{tag}{attrs} style=\"{_TAG_STYLES[tag]}\">"
+        return f"<{tag}{attrs} style=\"{tag_styles[tag]}\">"
 
     return re.sub(r'<([a-zA-Z][a-zA-Z0-9]*)((?:\s[^>]*)?)?>', replacer, html_fragment)
 
 
 # ── Public builders ──────────────────────────────────────────────────────────
 
-def build_html(month: str, year: int, sections: list, generated_at: str) -> str:
+def build_html(month: str, year: int, sections: list, generated_at: str, regional_briefing: str = "") -> str:
 
     toc_items = "\n".join(
         f'<a href="#country-{c["code"]}" style="{_TOC_LINK_STYLE}">'
@@ -179,6 +211,7 @@ def build_html(month: str, year: int, sections: list, generated_at: str) -> str:
     )
 
     country_blocks = "\n".join(_country_block(c) for c in sections)
+    regional_block = _regional_block(regional_briefing) if regional_briefing else ""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -204,15 +237,6 @@ def build_html(month: str, year: int, sections: list, generated_at: str) -> str:
     }}
 
     /* ── Print / Save-as-PDF ────────────────────────────────────── */
-    /*
-     * Browsers suppress background-color by default when printing.
-     * These three vendor-prefixed properties override that behaviour
-     * so the dark theme, card backgrounds, and accent colours all
-     * appear in the PDF exactly as they do on screen.
-     *
-     * Also re-declares the body background because some print engines
-     * ignore the inline style on <body> but honour a print rule.
-     */
     @media print {{
       *,
       *::before,
@@ -256,6 +280,9 @@ def build_html(month: str, year: int, sections: list, generated_at: str) -> str:
     </p>
   </div>
 
+  <!-- ════════════════════ REGIONAL EXECUTIVE BRIEFING ════════════════════ -->
+  {regional_block}
+
   <!-- ════════════════════ TABLE OF CONTENTS ════════════════════ -->
   <div class="toc-box" style="{_TOC_BOX_STYLE}">
     <p style="{_TOC_LABEL_STYLE}">Jump to Country</p>
@@ -284,14 +311,38 @@ def build_html(month: str, year: int, sections: list, generated_at: str) -> str:
 </html>"""
 
 
+def _regional_block(regional_briefing: str) -> str:
+    """
+    Renders the cross-country synthesis as the lead section, styled distinctly
+    (amber accent) from the blue country cards below it.
+    """
+    styled_content = _inject_inline_styles(regional_briefing, _REGIONAL_TAG_STYLES)
+    return f"""
+  <div class="no-break" id="regional-briefing" style="{_REGIONAL_CARD_STYLE}">
+    <div style="{_REGIONAL_BADGE_STYLE}">Regional Executive Briefing</div>
+    {styled_content}
+  </div>"""
+
+
 def _country_block(c: dict) -> str:
     """
     Wraps a country section in a styled card.
     Claude's HTML content is post-processed to add inline styles on bare tags.
+
+    Anchor compatibility note: TOC "jump to country" links use #id anchors.
+    Some email clients (older Gmail, Yahoo) only honour the legacy
+    <a name="..."> anchor pattern rather than an element id, so both are
+    included here for maximum compatibility. Outlook desktop (the Word-based
+    rendering engine) does not reliably support in-page anchor jumps in HTML
+    email at all — this is a known Outlook limitation, not something fixable
+    from the HTML side. In Outlook, "Jump to Country" links may just scroll
+    to the top or do nothing; the country cards are still all present below,
+    in order, so nothing is lost — it's a navigation convenience, not content.
     """
     styled_content = _inject_inline_styles(c["content"])
     return f"""
   <div class="no-break" id="country-{c['code']}" style="{_CARD_STYLE}">
+    <a name="country-{c['code']}"></a>
     <div style="{_CARD_HEADER_STYLE}">
       <span style="{_FLAG_CELL_STYLE}">{c['flag']}</span>
       <span style="{_NAME_CELL_STYLE}">{c['name']}</span>
@@ -300,13 +351,24 @@ def _country_block(c: dict) -> str:
   </div>"""
 
 
-def build_plain_text(month: str, year: int, sections: list) -> str:
+def build_plain_text(month: str, year: int, sections: list, regional_briefing: str = "") -> str:
     """Plain-text fallback for email clients that don't render HTML."""
     lines = [
         f"APAC Cybersecurity Monthly Retrospective \u2014 {month} {year}",
         "=" * 62,
         "",
     ]
+
+    if regional_briefing:
+        lines.append("REGIONAL EXECUTIVE BRIEFING")
+        lines.append("-" * 40)
+        text = re.sub(r"<[^>]+>", " ", regional_briefing)
+        text = re.sub(r"\s{2,}", " ", text).strip()
+        lines.append(text)
+        lines.append("")
+        lines.append("=" * 62)
+        lines.append("")
+
     for c in sections:
         lines.append(f"{c['flag']}  {c['name'].upper()}")
         lines.append("-" * 40)
