@@ -284,21 +284,52 @@ Here are the country briefings:
 
 def synthesize_regional_briefing(client: anthropic.Anthropic, sections: list, month: str, year: int) -> str:
     """Single non-agentic call (no web search) that synthesizes the 12 country
-    briefings into one regional executive summary."""
-    try:
-        response = api_call_with_retry(
-            client,
-            [{"role": "user", "content": _regional_prompt(month, year, sections)}],
-            REGIONAL_SYSTEM,
-            use_web_search=False,
-            model=MODEL_SYNTHESIS,
-            max_tokens=1200,
-        )
-        text_parts = [b.text for b in response.content if b.type == "text" and b.text.strip()]
-        return "\n".join(text_parts) if text_parts else _regional_fallback(month, year)
-    except Exception as e:
-        print(f"  ⚠  Regional briefing synthesis failed: {e}")
-        return _regional_fallback(month, year)
+    briefings into one regional executive summary.
+
+    Tries MODEL_SYNTHESIS first (cheaper). If that call fails for any reason
+    (model access issue, transient error, etc.) it retries once on
+    MODEL_RESEARCH — the model that just successfully generated all 12
+    country sections, so we know it works for this account — before giving
+    up and returning the fallback text. Both failures are logged with full
+    detail so the real cause is visible in the GitHub Actions log, not just
+    the generic fallback message.
+    """
+    prompt = _regional_prompt(month, year, sections)
+    attempts = [
+        ("MODEL_SYNTHESIS", MODEL_SYNTHESIS, 1200),
+        ("MODEL_RESEARCH (fallback)", MODEL_RESEARCH, 1200),
+    ]
+
+    last_error = None
+    failed_labels = []
+    for label, model, max_tokens in attempts:
+        try:
+            response = api_call_with_retry(
+                client,
+                [{"role": "user", "content": prompt}],
+                REGIONAL_SYSTEM,
+                use_web_search=False,
+                model=model,
+                max_tokens=max_tokens,
+            )
+            text_parts = [b.text for b in response.content if b.type == "text" and b.text.strip()]
+            if text_parts:
+                if failed_labels:
+                    print(f"  ℹ  Regional briefing succeeded on {label} ({model}) "
+                          f"after {', '.join(failed_labels)} failed.")
+                return "\n".join(text_parts)
+            print(f"  ⚠  {label} ({model}) returned no text content — trying next option if available.")
+            failed_labels.append(label)
+        except Exception as e:
+            last_error = e
+            failed_labels.append(label)
+            print(f"  ⚠  Regional briefing synthesis failed on {label} ({model}): "
+                  f"{type(e).__name__}: {e}")
+
+    if last_error is not None:
+        print(f"  ⚠  All regional briefing attempts failed. Last error: "
+              f"{type(last_error).__name__}: {last_error}")
+    return _regional_fallback(month, year)
 
 
 def _regional_fallback(month: str, year: int) -> str:
