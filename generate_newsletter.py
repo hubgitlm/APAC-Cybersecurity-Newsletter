@@ -80,6 +80,11 @@ Your writing style:
 - End with a decision the board should make or a question it should ask management — not a
   technical instruction to an IT team.
 
+Output format is strict: your entire response must be ONLY the HTML structure below — starting
+immediately with the first <h3> tag. Never include meta-commentary about your own research
+process (e.g. "Now I have enough material to write..." or "Based on my research..."). Never
+include a title, heading, or any text before the first <h3> tag.
+
 When you write HTML, use ONLY these tags (no inline styles, no classes):
 <h3>, <h4>, <p>, <ul>, <li>, <strong>, <em>, <a href="...">, <hr>
 
@@ -178,17 +183,33 @@ def api_call_with_retry(
                 raise
 
 
+# ── Defensive post-processing ────────────────────────────────────────────────
+def _strip_preamble(html: str) -> str:
+    """
+    Removes any stray text before the first <h3> tag. Even with an explicit
+    system-prompt instruction not to, models occasionally narrate their own
+    process first (e.g. "Now I have enough material to write..." or a stray
+    markdown title). This is a safety net, not the primary fix — the prompt
+    instruction is the primary fix; this catches what slips through.
+    Leaves content unchanged if no <h3> tag is found at all (better to show
+    unexpected content than silently return an empty string).
+    """
+    import re as _re
+    match = _re.search(r"<h3", html, _re.IGNORECASE)
+    return html[match.start():] if match else html
+
+
 # ── Agentic research loop per country ───────────────────────────────────────
 def research_country(client: anthropic.Anthropic, country: dict, month: str, year: int) -> str:
     messages = [{"role": "user", "content": country_prompt(country["name"], month, year)}]
 
     for iteration in range(MAX_RESEARCH_ITERATIONS):
-        response = api_call_with_retry(client, messages, ANALYST_SYSTEM)
+        response = api_call_with_retry(client, messages, ANALYST_SYSTEM, max_tokens=4000)
 
         text_parts = [b.text for b in response.content if b.type == "text" and b.text.strip()]
 
         if response.stop_reason == "end_turn":
-            return "\n".join(text_parts) if text_parts else _fallback(country["name"], month, year)
+            return _strip_preamble("\n".join(text_parts)) if text_parts else _fallback(country["name"], month, year)
 
         messages.append({"role": "assistant", "content": response.content})
         tool_results = [
@@ -203,7 +224,7 @@ def research_country(client: anthropic.Anthropic, country: dict, month: str, yea
         if tool_results:
             messages.append({"role": "user", "content": tool_results})
         else:
-            return "\n".join(text_parts) if text_parts else _fallback(country["name"], month, year)
+            return _strip_preamble("\n".join(text_parts)) if text_parts else _fallback(country["name"], month, year)
 
     return _fallback(country["name"], month, year)
 
@@ -226,6 +247,16 @@ Your reader is a board member or executive overseeing a multi-country APAC busin
 the regional pattern, not another repetition of the country details.
 
 Writing style: plain English, business-impact first, concise, no jargon without a gloss.
+
+Output format is strict. Your entire response must be exactly this, nothing else:
+
+Line 1: HEADLINE: [a short, complete sentence, 8-14 words, suitable as an email subject line,
+summarizing the single biggest regional story this month — not a sentence fragment, not
+truncated, no colon-separated clauses]
+
+Then, starting on the next line, the HTML body below — starting immediately with the first
+<h3> tag. Never include meta-commentary about your own process. Never include a markdown title,
+a "#" heading, or any text before "HEADLINE:" or between the HEADLINE line and the first <h3> tag.
 
 When you write HTML, use ONLY these tags (no inline styles, no classes):
 <h3>, <h4>, <p>, <ul>, <li>, <strong>, <em>, <hr>
@@ -257,7 +288,10 @@ def _regional_prompt(month: str, year: int, sections: list) -> str:
 write a single "Regional Executive Briefing" synthesizing the cross-market picture. Do not restate
 every country — pull out the pattern.
 
-Structure exactly like this:
+Remember the required output format: a "HEADLINE:" line first (short, complete sentence, 8-14
+words), then the HTML body starting immediately with the first <h3> tag — no other text anywhere.
+
+Structure the HTML body exactly like this:
 
 <h3>The Big Picture</h3>
 <p>[2-4 sentences: what was the defining regional theme this month across the 12 markets?]</p>
@@ -271,7 +305,8 @@ Structure exactly like this:
 <h3>Regulatory Direction of Travel</h3>
 <p>[Is regulation across the region converging or diverging this month — e.g. multiple countries
 tightening breach-notification rules, or one market moving out of step with its neighbours? What
-should a multi-country board take from that?]</p>
+should a multi-country board take from that? Write this as complete sentences — do not cut off
+mid-thought.]</p>
 
 <h3>What the Board Should Watch</h3>
 <p>[The single most important cross-market takeaway for a board overseeing operations across
@@ -282,9 +317,30 @@ Here are the country briefings:
 {digest}"""
 
 
-def synthesize_regional_briefing(client: anthropic.Anthropic, sections: list, month: str, year: int) -> str:
+def _parse_regional_output(raw_text: str) -> tuple:
+    """
+    Splits the model's output into (headline, body_html).
+    Expects a first line 'HEADLINE: ...' followed by the HTML body. Falls back
+    gracefully if the model didn't follow the format exactly: headline becomes
+    "" (caller can fall back to a generic subject) and the whole text is
+    treated as body, with _strip_preamble cleaning up anything before the
+    first <h3> regardless.
+    """
+    import re as _re
+    match = _re.match(r"\s*HEADLINE:\s*(.+?)\s*\n(.*)", raw_text, _re.DOTALL | _re.IGNORECASE)
+    if match:
+        headline = match.group(1).strip()
+        body = match.group(2)
+    else:
+        headline = ""
+        body = raw_text
+    return headline, _strip_preamble(body)
+
+
+def synthesize_regional_briefing(client: anthropic.Anthropic, sections: list, month: str, year: int) -> tuple:
     """Single non-agentic call (no web search) that synthesizes the 12 country
-    briefings into one regional executive summary.
+    briefings into one regional executive summary, plus a short subject-line
+    headline parsed from the same response (no extra API call).
 
     Tries MODEL_SYNTHESIS first (cheaper). If that call fails for any reason
     (model access issue, transient error, etc.) it retries once on
@@ -293,11 +349,13 @@ def synthesize_regional_briefing(client: anthropic.Anthropic, sections: list, mo
     up and returning the fallback text. Both failures are logged with full
     detail so the real cause is visible in the GitHub Actions log, not just
     the generic fallback message.
+
+    Returns (headline: str, briefing_html: str).
     """
     prompt = _regional_prompt(month, year, sections)
     attempts = [
-        ("MODEL_SYNTHESIS", MODEL_SYNTHESIS, 1200),
-        ("MODEL_RESEARCH (fallback)", MODEL_RESEARCH, 1200),
+        ("MODEL_SYNTHESIS", MODEL_SYNTHESIS, 2000),
+        ("MODEL_RESEARCH (fallback)", MODEL_RESEARCH, 2000),
     ]
 
     last_error = None
@@ -317,7 +375,8 @@ def synthesize_regional_briefing(client: anthropic.Anthropic, sections: list, mo
                 if failed_labels:
                     print(f"  ℹ  Regional briefing succeeded on {label} ({model}) "
                           f"after {', '.join(failed_labels)} failed.")
-                return "\n".join(text_parts)
+                headline, body = _parse_regional_output("\n".join(text_parts))
+                return headline, body
             print(f"  ⚠  {label} ({model}) returned no text content — trying next option if available.")
             failed_labels.append(label)
         except Exception as e:
@@ -329,7 +388,7 @@ def synthesize_regional_briefing(client: anthropic.Anthropic, sections: list, mo
     if last_error is not None:
         print(f"  ⚠  All regional briefing attempts failed. Last error: "
               f"{type(last_error).__name__}: {last_error}")
-    return _regional_fallback(month, year)
+    return "", _regional_fallback(month, year)
 
 
 def _regional_fallback(month: str, year: int) -> str:
@@ -342,10 +401,12 @@ def _regional_fallback(month: str, year: int) -> str:
 
 def extract_headline(regional_briefing: str, max_len: int = 90) -> str:
     """
-    Pulls a short, scroll-stopping headline out of the Regional Briefing's
-    'The Big Picture' section for use in the email subject line.
-    Costs no extra API call — parsed from content already generated.
-    Falls back to a generic string if parsing fails.
+    Fallback headline extractor, used only if the model didn't follow the
+    'HEADLINE: ...' output format (see _parse_regional_output). Pulls the
+    first full sentence out of 'The Big Picture' section. Returns "" rather
+    than a garbled mid-clause truncation if no clean sentence boundary exists
+    within max_len — main.py falls back to a fully generic subject line in
+    that case, which reads better than a cut-off fragment.
     """
     import re as _re
     match = _re.search(
@@ -357,11 +418,10 @@ def extract_headline(regional_briefing: str, max_len: int = 90) -> str:
         return ""
 
     text = _re.sub(r"<[^>]+>", "", match.group(1)).strip()
-    # Use the first sentence only, trimmed to a subject-line-friendly length
     first_sentence = _re.split(r"(?<=[.!?])\s+", text)[0].strip()
-    if len(first_sentence) > max_len:
-        first_sentence = first_sentence[: max_len - 1].rsplit(" ", 1)[0] + "…"
-    return first_sentence
+    if len(first_sentence) <= max_len:
+        return first_sentence
+    return ""
 
 
 # ── Main entry point ─────────────────────────────────────────────────────────
@@ -387,12 +447,17 @@ def generate_newsletter(month: str, year: int):
             time.sleep(SLEEP_BETWEEN_COUNTRIES)
 
     print(f"  [--/--] Synthesizing Regional Executive Briefing ...", flush=True)
-    regional_briefing = synthesize_regional_briefing(client, sections, month, year)
+    headline, regional_briefing = synthesize_regional_briefing(client, sections, month, year)
     print(f"         ✓ Done", flush=True)
+
+    # Fallback chain: if the model didn't follow the HEADLINE: format for some
+    # reason, try parsing one out of the body text; main.py falls back to a
+    # fully generic subject if this also comes back empty.
+    if not headline:
+        headline = extract_headline(regional_briefing)
 
     generated_at = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
     html       = build_html(month, year, sections, generated_at, regional_briefing)
     plain_text = build_plain_text(month, year, sections, regional_briefing)
-    headline   = extract_headline(regional_briefing)
 
     return html, plain_text, headline
