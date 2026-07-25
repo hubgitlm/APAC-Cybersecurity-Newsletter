@@ -118,6 +118,52 @@ _FOOTER_STYLE = (
     f"text-align:center;padding:24px 0;color:{TEXT_MUTED};font-size:12px;"
 )
 
+# ── Per-card navigation strip (repeated inside every country card) ──────────
+# Lets readers jump directly to another country from wherever they're
+# currently reading, instead of having to scroll back up to the top TOC.
+_NAV_STRIP_STYLE = (
+    f"margin:0 0 18px 0;padding-bottom:14px;"
+    f"border-bottom:1px solid {BORDER};"
+    f"font-size:12px;line-height:1.9;"
+)
+
+_NAV_STRIP_LABEL_STYLE = (
+    f"color:{TEXT_MUTED};font-size:11px;font-weight:700;"
+    "letter-spacing:.1em;text-transform:uppercase;margin-right:6px;"
+)
+
+_NAV_STRIP_LINK_STYLE = (
+    f"color:{ACCENT};text-decoration:none;margin:0 8px 0 0;"
+)
+
+_NAV_STRIP_CURRENT_STYLE = (
+    f"color:{TEXT_MUTED};margin:0 8px 0 0;"  # current country: muted, not a link
+)
+
+_NAV_STRIP_TOP_LINK_STYLE = (
+    f"color:{TEXT_MUTED};text-decoration:none;font-size:11px;float:right;"
+)
+
+# ── References (consolidated source links, end of newsletter) ───────────────
+_REFERENCES_CARD_STYLE = (
+    f"background-color:{CARD_BG};"
+    f"border:1px solid {BORDER};"
+    "border-radius:10px;"
+    "padding:28px 32px;"
+    "margin-bottom:24px;"
+)
+
+_REFERENCES_BADGE_STYLE = (
+    f"display:inline-block;background-color:{TEXT_MUTED};color:#000000;"
+    "font-size:11px;font-weight:800;letter-spacing:.1em;"
+    "text-transform:uppercase;padding:3px 10px;"
+    "border-radius:4px;margin-bottom:14px;"
+)
+
+_REFERENCES_COUNTRY_HEADING_STYLE = (
+    "font-size:13px;font-weight:700;color:#ffffff;margin:16px 0 6px 0;"
+)
+
 # ── Regional Briefing (lead section) card/badge styles ──────────────────────
 _REGIONAL_CARD_STYLE = (
     f"background-color:{CARD_BG};"
@@ -182,6 +228,26 @@ _REGIONAL_TAG_STYLES = {
 }
 
 
+def _extract_sources(content: str) -> tuple:
+    """
+    Splits a country's content into (content_without_sources, sources_ul_html).
+    The Sources <h3>/<ul> block Claude writes per-country is pulled out here so
+    it can be rendered once, consolidated, in a References section at the end
+    of the newsletter — rather than repeated inline inside every country card.
+    Returns sources_ul_html as "" if no Sources section was found.
+    """
+    match = re.search(
+        r"<h3>\s*Sources\s*</h3>\s*(<ul>.*?</ul>)",
+        content,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return content, ""
+    sources_html = match.group(1)
+    remaining = content[:match.start()] + content[match.end():]
+    return remaining.strip(), sources_html
+
+
 def _inject_inline_styles(html_fragment: str, tag_styles: dict = _TAG_STYLES) -> str:
     """
     Post-processes Claude's HTML output and adds inline styles to bare tags.
@@ -210,8 +276,19 @@ def build_html(month: str, year: int, sections: list, generated_at: str, regiona
         for c in sections
     )
 
-    country_blocks = "\n".join(_country_block(c) for c in sections)
+    # Extract each country's Sources block so it can be consolidated into a
+    # single References section at the end, instead of repeated inline.
+    stripped_sections = []
+    references = []  # list of (country dict, sources_ul_html)
+    for c in sections:
+        remaining, sources_html = _extract_sources(c["content"])
+        stripped_sections.append({**c, "content": remaining})
+        if sources_html:
+            references.append((c, sources_html))
+
+    country_blocks = "\n".join(_country_block(c, sections) for c in stripped_sections)
     regional_block = _regional_block(regional_briefing) if regional_briefing else ""
+    references_block = _references_block(references) if references else ""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -253,8 +330,9 @@ def build_html(month: str, year: int, sections: list, generated_at: str, regiona
         page-break-inside: avoid;
         break-inside: avoid;
       }}
-      /* Hide the TOC jump links \u2014 anchors don\u2019t work in PDF */
+      /* Hide the TOC jump links and per-card nav strips \u2014 anchors don\u2019t work in PDF */
       .toc-box {{ display: none; }}
+      .nav-strip {{ display: none; }}
     }}
 
     /* ── Responsive (screen only) ───────────────────────────────── */
@@ -267,7 +345,8 @@ def build_html(month: str, year: int, sections: list, generated_at: str, regiona
   </style>
 </head>
 <body style="{_BODY_STYLE}">
-<div class="wrapper" style="{_WRAPPER_STYLE}">
+<div class="wrapper" id="top" style="{_WRAPPER_STYLE}">
+<a name="top"></a>
 
   <!-- ════════════════════ HEADER ════════════════════ -->
   <div class="header-cell no-break" style="{_HEADER_STYLE}">
@@ -292,13 +371,16 @@ def build_html(month: str, year: int, sections: list, generated_at: str, regiona
   <!-- ════════════════════ COUNTRY SECTIONS ════════════════════ -->
   {country_blocks}
 
+  <!-- ════════════════════ REFERENCES ════════════════════ -->
+  {references_block}
+
   <!-- ════════════════════ FOOTER ════════════════════ -->
   <div style="{_FOOTER_STYLE}">
     <p style="margin:0 0 4px 0;color:{TEXT_MUTED};">
       APAC Cybersecurity Newsletter &nbsp;&middot;&nbsp; {month} {year}
     </p>
     <p style="margin:0 0 8px 0;color:{TEXT_MUTED};">
-      Generated {generated_at} &nbsp;&middot;&nbsp; Powered by Claude + Web Search
+      Generated {generated_at}
     </p>
     <p style="font-size:11px;color:#555555;margin:0;">
       This newsletter is for informational purposes only.
@@ -324,7 +406,31 @@ def _regional_block(regional_briefing: str) -> str:
   </div>"""
 
 
-def _country_block(c: dict) -> str:
+def _country_nav_strip(all_sections: list, current_code: str) -> str:
+    """
+    Small repeated navigation row inside every country card, so a reader can
+    jump directly to another country from wherever they currently are,
+    instead of scrolling back up to the top-of-newsletter TOC each time.
+    Current country is shown muted/plain (not a link); a "Back to top" link
+    sits on the right for reaching the main TOC or Regional Briefing.
+    """
+    links = []
+    for c in all_sections:
+        if c["code"] == current_code:
+            links.append(f'<span style="{_NAV_STRIP_CURRENT_STYLE}"><strong>{c["flag"]} {c["name"]}</strong></span>')
+        else:
+            links.append(
+                f'<a href="#country-{c["code"]}" style="{_NAV_STRIP_LINK_STYLE}">{c["flag"]} {c["name"]}</a>'
+            )
+    links_html = "".join(links)
+    return f"""
+    <div class="nav-strip" style="{_NAV_STRIP_STYLE}">
+      <a href="#top" style="{_NAV_STRIP_TOP_LINK_STYLE}">&uarr; Top</a>
+      <span style="{_NAV_STRIP_LABEL_STYLE}">Jump to:</span>{links_html}
+    </div>"""
+
+
+def _country_block(c: dict, all_sections: list) -> str:
     """
     Wraps a country section in a styled card.
     Claude's HTML content is post-processed to add inline styles on bare tags.
@@ -335,11 +441,12 @@ def _country_block(c: dict) -> str:
     included here for maximum compatibility. Outlook desktop (the Word-based
     rendering engine) does not reliably support in-page anchor jumps in HTML
     email at all — this is a known Outlook limitation, not something fixable
-    from the HTML side. In Outlook, "Jump to Country" links may just scroll
-    to the top or do nothing; the country cards are still all present below,
-    in order, so nothing is lost — it's a navigation convenience, not content.
+    from the HTML side. In Outlook, jump links may just scroll to the top or
+    do nothing; the country cards are still all present below, in order, so
+    nothing is lost — it's a navigation convenience, not content.
     """
     styled_content = _inject_inline_styles(c["content"])
+    nav_strip = _country_nav_strip(all_sections, c["code"])
     return f"""
   <div class="no-break" id="country-{c['code']}" style="{_CARD_STYLE}">
     <a name="country-{c['code']}"></a>
@@ -347,8 +454,36 @@ def _country_block(c: dict) -> str:
       <span style="{_FLAG_CELL_STYLE}">{c['flag']}</span>
       <span style="{_NAME_CELL_STYLE}">{c['name']}</span>
     </div>
+    {nav_strip}
     {styled_content}
   </div>"""
+
+
+def _references_block(references: list) -> str:
+    """
+    Consolidated source links for every country, rendered once at the end of
+    the newsletter (before the footer) rather than repeated inline per card.
+    `references` is a list of (country_dict, sources_ul_html) tuples.
+    """
+    sections_html = []
+    for c, sources_html in references:
+        styled_sources = _inject_inline_styles(sources_html)
+        sections_html.append(
+            f'<div style="{_REFERENCES_COUNTRY_HEADING_STYLE}">{c["flag"]} {c["name"]}</div>'
+            f'{styled_sources}'
+        )
+    return f"""
+  <div class="no-break" id="references" style="{_REFERENCES_CARD_STYLE}">
+    <a name="references"></a>
+    <div style="{_REFERENCES_BADGE_STYLE}">References</div>
+    {''.join(sections_html)}
+  </div>"""
+
+
+def _plain_text_links(sources_html: str) -> list:
+    """Extracts (title, url) pairs from a Sources <ul> block for plain-text rendering,
+    where tag-stripping alone would silently discard the href."""
+    return re.findall(r'<a\s+href="([^"]+)">(.*?)</a>', sources_html, re.DOTALL)
 
 
 def build_plain_text(month: str, year: int, sections: list, regional_briefing: str = "") -> str:
@@ -369,14 +504,31 @@ def build_plain_text(month: str, year: int, sections: list, regional_briefing: s
         lines.append("=" * 62)
         lines.append("")
 
+    references = []  # (country dict, [(title, url), ...])
     for c in sections:
+        remaining, sources_html = _extract_sources(c["content"])
+        if sources_html:
+            references.append((c, _plain_text_links(sources_html)))
+
         lines.append(f"{c['flag']}  {c['name'].upper()}")
         lines.append("-" * 40)
-        text = re.sub(r"<[^>]+>", " ", c["content"])
+        text = re.sub(r"<[^>]+>", " ", remaining)
         text = re.sub(r"\s{2,}", " ", text).strip()
         lines.append(text)
         lines.append("")
         lines.append("")
+
+    if references:
+        lines.append("=" * 62)
+        lines.append("REFERENCES")
+        lines.append("-" * 40)
+        for c, links in references:
+            lines.append(f"{c['flag']}  {c['name']}")
+            for title, url in links:
+                clean_title = re.sub(r"\s{2,}", " ", title).strip()
+                lines.append(f"  - {clean_title}: {url}")
+            lines.append("")
+
     lines.append("\u2500" * 62)
     lines.append("APAC Cybersecurity Newsletter \u00b7 For informational purposes only.")
     return "\n".join(lines)

@@ -57,6 +57,11 @@ calls already found.
 - **Sector Watch** — which industries were most targeted this month
 - **Board Takeaway** — one question or decision for the board
 - **Sources** — up to 5 real article links Claude actually retrieved via web search
+  (rendered once, consolidated, in the References section at the end — see below)
+
+Every country card also has a small **"Jump to:" navigation strip** listing all 12 countries
+plus a "↑ Top" link, so a reader can jump directly to another country from wherever they
+currently are, without scrolling back up to the main table of contents each time.
 
 ### The newsletter also includes
 
@@ -64,6 +69,9 @@ calls already found.
   sections into: the defining regional theme, where risk concentrated across markets,
   whether regulation is converging or diverging region-wide, and the one thing a
   multi-country board should watch this month.
+- **Table of Contents** (top) — flag + country name links to jump straight to any section.
+- **References** (end, before the footer) — every country's source links, consolidated in
+  one place and grouped by country, instead of repeated inline in each card.
 
 ---
 
@@ -239,13 +247,14 @@ browser or app and don't apply to an automated script like this one.
 
 - **All layout/colour styles are inline** on every element — survives Gmail forwarding,
   Outlook, and any client that strips `<style>` blocks.
-- **"Jump to Country" links** use both `id="country-XX"` and `<a name="country-XX">` for
-  the widest client compatibility. **Known limitation:** Outlook desktop (the Word-based
-  rendering engine) does not reliably support in-page anchor jumps in HTML email at all,
-  regardless of markup — if a link doesn't jump there, all the content is still present
-  below in order, so nothing is lost.
+- **Navigation links** (top TOC, per-card "Jump to:" strips, "↑ Top" links) use both
+  `id="..."` and `<a name="...">` anchors for the widest client compatibility. **Known
+  limitation:** Outlook desktop (the Word-based rendering engine) does not reliably support
+  in-page anchor jumps in HTML email at all, regardless of markup — if a link doesn't jump
+  there, all the content is still present below in order, so nothing is lost.
 - **Print / Save-as-PDF** uses `print-color-adjust: exact` to preserve the dark theme and
-  accent colours when printed.
+  accent colours when printed. The top TOC and per-card nav strips are hidden in print view
+  (`.toc-box`, `.nav-strip`), since anchor jumps don't mean anything on a printed page.
 - **Country flag emoji** use an explicit font stack (`Apple Color Emoji`, `Segoe UI Emoji`,
   `Noto Color Emoji`, `Twemoji Mozilla`) so they render as colour flags, not boxes.
 
