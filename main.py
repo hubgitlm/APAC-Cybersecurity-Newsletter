@@ -65,7 +65,7 @@ def main():
     month, year = get_previous_month()
     print(f"\n📅  Generating newsletter for: {month} {year}\n")
 
-    html, plain_text = generate_newsletter(month, year)
+    html, plain_text, headline = generate_newsletter(month, year)
 
     output_path = f"newsletter_{month.lower()}_{year}.html"
     with open(output_path, "w", encoding="utf-8") as f:
@@ -77,7 +77,7 @@ def main():
         return
 
     recipients = [r.strip() for r in os.environ["RECIPIENTS"].split(",") if r.strip()]
-    subject = f"APAC Cybersecurity — {month} {year} Monthly Retrospective"
+    subject = headline.strip() if headline and headline.strip() else f"APAC Cybersecurity — {month} {year} Monthly Retrospective"
 
     print(f"\n📧  Sending to {len(recipients)} recipient(s)...")
     print(f"    Masked list: {', '.join(mask_email(r) for r in recipients)}")
