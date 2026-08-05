@@ -25,6 +25,7 @@ import random
 import urllib.parse
 from datetime import datetime
 from email_template import build_html, build_plain_text
+from infographic import build_infographic_html, render_infographic_pdf
 
 # ── Countries & display config ──────────────────────────────────────────────
 COUNTRIES = [
@@ -246,6 +247,37 @@ def _extract_executive_summary(html: str) -> str:
     return re.sub(r"<[^>]+>", "", match.group(1)).strip()
 
 
+def _extract_tagged_items(html: str) -> list:
+    """
+    Returns every severity-tagged incident as plain text, in document order:
+    [{"severity": "critical", "text": "Org Name — 5 Mar 2026. What happened..."}, ...]
+    Feeds the infographic's watchlist without needing a separate API call.
+    """
+    items = []
+    for m in re.finditer(r'<li data-severity="(\w+)">(.*?)</li>', html, re.DOTALL):
+        severity = m.group(1).lower()
+        if severity not in SEVERITY_ORDER:
+            continue
+        text = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+        text = re.sub(r"\s+", " ", text)
+        items.append({"severity": severity, "text": text})
+    return items
+
+
+def _extract_labeled_items(html: str) -> dict:
+    """
+    Parses <li><strong>Label:</strong> text</li> items (used in the Regional
+    Briefing's Highest Severity / Cross-Border Pattern / Regulatory Watch
+    bullets) into {label: text}.
+    """
+    result = {}
+    for m in re.finditer(r"<li><strong>([^<:]+):</strong>\s*(.*?)</li>", html, re.DOTALL):
+        label = m.group(1).strip()
+        text = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+        result[label] = text
+    return result
+
+
 # ── QuickChart URL builders (no hosting needed — chart config lives in the URL) ──
 def _quickchart_url(chart_config: dict, width=140, height=140, bg="transparent") -> str:
     encoded = urllib.parse.quote(json.dumps(chart_config, separators=(",", ":")))
@@ -453,4 +485,14 @@ def generate_newsletter(month: str, year: int, country_limit: int | None = None)
     if not headline:
         headline = f"APAC Cybersecurity — {month} {year} Monthly Retrospective"
 
-    return html, plain_text, headline
+    print("  [Infographic] Rendering one-page PDF snapshot ...", flush=True)
+    infographic_pdf = None
+    try:
+        infographic_html = build_infographic_html(month, year, sections, regional, regional_chart_url)
+        infographic_pdf = render_infographic_pdf(infographic_html)
+        print(f"         ✓ Done ({len(infographic_pdf):,} bytes)", flush=True)
+    except Exception as e:
+        print(f"         ⚠  Infographic PDF failed, continuing without it: {e}", flush=True)
+        infographic_pdf = None
+
+    return html, plain_text, headline, infographic_pdf

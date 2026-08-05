@@ -37,7 +37,13 @@ main.py
     │       → QuickChart.io donut + stacked-bar charts (rendered on demand,
     │         no image hosting required)
     │
-    └─► send_email.py  →  Gmail SMTP → Recipients (subject = regional headline)
+    ├─► infographic.py  →  Builds a one-page landscape PDF snapshot
+    │       → regional headline + 3-point regional watch list
+    │       → 12-tile country grid, colour-coded by dominant severity
+    │       → rendered with WeasyPrint (pure Python, no headless browser)
+    │
+    └─► send_email.py  →  Gmail SMTP → Recipients (subject = regional headline,
+                            PDF snapshot attached)
 ```
 
 Each country section includes:
@@ -77,6 +83,40 @@ beyond aggregate incident counts ever leaves the URL.
 All styling is **inline on every element** (not just in a `<style>` block), so the
 newsletter survives Gmail/Outlook forwarding and clients that strip `<style>` tags
 on forward.
+
+---
+
+## Infographic PDF Snapshot
+
+Every run also generates a **one-page landscape PDF** — a board-readable snapshot
+of the entire newsletter — and attaches it to the email alongside the HTML body.
+
+**What's on it:**
+- Regional headline (same one used as the email subject)
+- The 3-point Regional Watch list (Highest Severity / Cross-Border Pattern / Regulatory Watch)
+- A 12-tile grid, one per country, colour-coded by that country's most severe
+  incident this month (red = critical present, orange = high, yellow = medium, green = low)
+- Each tile's headline stat (e.g. "4 Major Incidents") and severity donut
+
+**How it's built:** `infographic.py` builds the layout as HTML/CSS and renders it
+to PDF with [WeasyPrint](https://doc.courtbouillon.org/weasyprint/) — a pure-Python
+rendering engine (no headless Chrome/Playwright needed), which keeps the GitHub
+Actions job lightweight. It reuses the same QuickChart.io chart URLs as the email,
+so no extra chart-rendering logic is needed.
+
+**Known limitation:** WeasyPrint's text engine can't reliably render multi-codepoint
+flag emoji (the two-letter "regional indicator" sequences behind 🇸🇬, 🇭🇰, etc.) —
+they render as a broken glyph. The infographic tiles use the country code + name
+instead of a flag for this reason. The HTML email is unaffected (browsers/email
+clients render flag emoji fine).
+
+**If PDF generation fails**, it's treated as non-fatal — `generate_newsletter()`
+logs a warning and returns `None` for the PDF, and the email still sends normally
+without an attachment. The HTML email is always the primary deliverable.
+
+**Filename:** `newsletter_<month>_<year>_snapshot.pdf` (or with `_partialN` if
+run with `--countries=N`), uploaded as part of the same GitHub Actions artifact
+as the HTML file.
 
 ---
 
@@ -250,10 +290,12 @@ schedule:
 ```
 Use [crontab.guru](https://crontab.guru) to build cron expressions.
 
-### Add an attachment (PDF version)
+### PDF snapshot customisation
 
-Install `weasyprint` and add a conversion step in `main.py` after the HTML is
-written. The `@media print` rules already in `email_template.py` will apply.
+Edit `infographic.py` — `build_infographic_html()` controls the layout,
+`SEVERITY_COLORS` controls the tile accent colours (same dict pattern as
+`generate_newsletter.py`). If you change the Regional Briefing's `<ul>`
+structure, also check `_extract_regional_bullets()` stays in sync.
 
 ---
 
@@ -261,8 +303,9 @@ written. The `@media print` rules already in `email_template.py` will apply.
 
 Each run calls the Claude API 13 times: 12 country research calls (Sonnet +
 web search) and 1 regional synthesis call (Haiku, falling back to Sonnet only
-if Haiku's output fails). Charts are rendered externally by QuickChart at no
-cost to your API usage.
+if Haiku's output fails). Charts are rendered externally by QuickChart, and
+the infographic PDF is rendered locally by WeasyPrint — neither adds to your
+Claude API usage.
 
 Approximate monthly cost: **$0.50 – $2.00 USD** depending on response length.
 
@@ -274,7 +317,7 @@ Approximate monthly cost: **$0.50 – $2.00 USD** depending on response length.
 apac-cyber-newsletter/
 ├── .github/
 │   └── workflows/
-│       └── newsletter.yml      # GitHub Actions schedule + secrets
+│       └── newsletter.yml      # GitHub Actions schedule + secrets + WeasyPrint system deps
 ├── main.py                     # Orchestrator (entry point), supports --countries=N
 ├── smoke_test.py                # Zero-cost pipeline validation (stubs the Claude API)
 ├── generate_newsletter.py      # Claude API + web search research loop,
@@ -282,7 +325,8 @@ apac-cyber-newsletter/
 │                                #   briefing, QuickChart URL builders
 ├── email_template.py           # HTML & plain-text email builder,
 │                                #   stat cards, severity pills, charts
-├── send_email.py               # Gmail SMTP sender
+├── infographic.py              # One-page PDF snapshot builder (WeasyPrint)
+├── send_email.py               # Gmail SMTP sender, supports PDF attachment
 ├── requirements.txt
 ├── env.example                 # Copy to .env for local dev
 ├── .gitignore
@@ -300,8 +344,10 @@ apac-cyber-newsletter/
 | Empty country section | The web search found no results. This is rare — try re-running. |
 | `ValueError: not enough values to unpack` | `main.py` and `generate_newsletter.py` are out of sync on how many values `generate_newsletter()` returns — make sure both files are updated together. Running `python smoke_test.py` locally catches this for $0 before it reaches Actions. |
 | Actions job stops at "Smoke test pipeline" step | A structural bug was caught before any real API calls were made — no cost incurred. Check the step's log output for which assertion failed, fix it, and re-run. |
-| Charts show as broken image icons | QuickChart.io may be temporarily unreachable, or an email client is blocking remote images by default (common on first open — click "Show images"). |
+| Charts show as broken image icons (in the email) | QuickChart.io may be temporarily unreachable, or an email client is blocking remote images by default (common on first open — click "Show images"). |
 | "⚠ Regional briefing omitted" in logs | Both the Haiku and Sonnet attempts failed — check the logged exception. The newsletter still sends without the Regional Briefing section. |
+| "⚠ Infographic PDF failed" in logs | Non-fatal — check the logged exception. Usually a missing system library locally (see the apt-get step in `newsletter.yml` for the full list) or a transient QuickChart timeout. The email still sends without the attachment. |
+| `OSError: cannot load library ... libpango` (local runs only) | WeasyPrint's system libraries aren't installed on your machine. See the `apt-get install` line in `newsletter.yml` for the package list (Debian/Ubuntu); check WeasyPrint's install docs for macOS/Windows. |
 | Workflow not triggering | Check Actions is enabled; schedule runs are on UTC time. |
 | Rate limit errors | The script sleeps 60s between countries. Increase `SLEEP_BETWEEN_COUNTRIES` in `generate_newsletter.py` if needed. |
 

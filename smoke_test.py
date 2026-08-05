@@ -119,17 +119,25 @@ def run():
         _report(checks)
         sys.exit(1)
 
-    # ── Inspect the HTML file main.py just wrote ─────────────────────────────
-    written = [f for f in os.listdir(".") if f.startswith("newsletter_") and f.endswith(".html")]
-    checks["newsletter HTML file was written"] = len(written) == 1
+    # ── Inspect the files main.py just wrote ─────────────────────────────────
+    written_html = [f for f in os.listdir(".") if f.startswith("newsletter_") and f.endswith(".html")]
+    written_pdf = [f for f in os.listdir(".") if f.startswith("newsletter_") and f.endswith(".pdf")]
+    checks["newsletter HTML file was written"] = len(written_html) == 1
+    checks["infographic PDF file was written"] = len(written_pdf) == 1
 
-    if not written:
+    if not written_html:
         _report(checks)
         sys.exit(1)
 
-    html_path = written[0]
+    html_path = written_html[0]
     html = open(html_path, encoding="utf-8").read()
     os.remove(html_path)  # clean up the test artifact
+
+    if written_pdf:
+        pdf_bytes = open(written_pdf[0], "rb").read()
+        checks["infographic PDF starts with valid PDF header"] = pdf_bytes[:4] == b"%PDF"
+        checks["infographic PDF is a reasonable size (>1KB)"] = len(pdf_bytes) > 1000
+        os.remove(written_pdf[0])
 
     checks["all 12 country cards rendered"] = html.count('id="country-') == 12
     checks["no leftover data-severity attributes"] = "data-severity" not in html

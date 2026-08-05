@@ -91,13 +91,22 @@ def main():
     month, year = get_previous_month()
     print(f"\n📅  Generating newsletter for: {month} {year}\n")
 
-    html, plain_text, headline = generate_newsletter(month, year, country_limit=country_limit)
+    html, plain_text, headline, infographic_pdf = generate_newsletter(month, year, country_limit=country_limit)
 
     suffix = f"_partial{country_limit}" if country_limit else ""
     output_path = f"newsletter_{month.lower()}_{year}{suffix}.html"
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"\n✅  Newsletter saved to {output_path}")
+
+    pdf_filename = None
+    if infographic_pdf:
+        pdf_filename = f"newsletter_{month.lower()}_{year}{suffix}_snapshot.pdf"
+        with open(pdf_filename, "wb") as f:
+            f.write(infographic_pdf)
+        print(f"✅  Infographic snapshot saved to {pdf_filename}")
+    else:
+        print("⚠  No infographic snapshot was generated this run — email will send without a PDF attachment.")
 
     if dry_run:
         print("\n⏭  Dry run complete — skipping email send.")
@@ -110,7 +119,11 @@ def main():
 
     print(f"\n📧  Sending to {len(recipients)} recipient(s)...")
     print(f"    Masked list: {', '.join(mask_email(r) for r in recipients)}")
-    send_newsletter(subject, html, plain_text, recipients)
+    send_newsletter(
+        subject, html, plain_text, recipients,
+        attachment_bytes=infographic_pdf,
+        attachment_filename=pdf_filename,
+    )
     print("\n🎉  Done! Newsletter sent successfully.")
 
 
