@@ -17,6 +17,11 @@ on:
         options:
           - "false"
           - "true"
+      country_limit:
+        description: "Limit to first N countries (blank = all 12). Use 1-2 for a cheap real-API test before a full run."
+        required: false
+        default: ""
+        type: string
 
 jobs:
   send-newsletter:
@@ -40,7 +45,15 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ── 4. Generate only (dry run) ───────────────────────────────────────
+      # ── 4. Zero-cost structural smoke test (stubs the Claude API) ─────────
+      # Runs main.py's full --dry-run path against fake Claude responses.
+      # Catches signature mismatches, template bugs, and parsing errors
+      # BEFORE any real API calls happen. If this fails, the job stops here
+      # and no credits are spent.
+      - name: Smoke test pipeline (no API calls, no cost)
+        run: python smoke_test.py
+
+      # ── 5. Generate only (dry run) ───────────────────────────────────────
       - name: Generate newsletter (dry run)
         if: ${{ github.event.inputs.dry_run == 'true' }}
         env:
@@ -48,9 +61,16 @@ jobs:
           GMAIL_USER:        ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           RECIPIENTS:        ${{ secrets.RECIPIENTS }}
-        run: python main.py --dry-run
+          COUNTRY_LIMIT:     ${{ github.event.inputs.country_limit }}
+        run: |
+          if [ -n "$COUNTRY_LIMIT" ]; then
+            echo "Running LIMITED dry run — first $COUNTRY_LIMIT countries only"
+            python main.py --dry-run --countries="$COUNTRY_LIMIT"
+          else
+            python main.py --dry-run
+          fi
 
-      # ── 5. Generate & send ───────────────────────────────────────────────
+      # ── 6. Generate & send ───────────────────────────────────────────────
       - name: Generate and send newsletter
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
@@ -58,9 +78,16 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           GMAIL_USER:         ${{ secrets.GMAIL_USER }}
           RECIPIENTS:         ${{ secrets.RECIPIENTS }}
-        run: python main.py
+          COUNTRY_LIMIT:      ${{ github.event.inputs.country_limit }}
+        run: |
+          if [ -n "$COUNTRY_LIMIT" ]; then
+            echo "⚠ Running LIMITED live send — first $COUNTRY_LIMIT countries only, subject line will be tagged [TEST]"
+            python main.py --countries="$COUNTRY_LIMIT"
+          else
+            python main.py
+          fi
 
-      # ── 6. Upload generated HTML as artifact (90-day retention) ──────────
+      # ── 7. Upload generated HTML as artifact (90-day retention) ──────────
       - name: Upload newsletter HTML
         if: always()
         uses: actions/upload-artifact@v4
