@@ -400,13 +400,20 @@ def _generate_regional_briefing(client: anthropic.Anthropic, sections: list):
 
 
 # ── Main entry point ─────────────────────────────────────────────────────────
-def generate_newsletter(month: str, year: int):
+def generate_newsletter(month: str, year: int, country_limit: int | None = None):
+    """
+    country_limit: if set, only researches the first N countries in COUNTRIES
+    and skips the regional briefing if fewer than 2 countries are present
+    (a single-country digest isn't useful for cross-market synthesis).
+    Intended for cheap real-API smoke runs — leave as None for full runs.
+    """
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
+    countries_to_run = COUNTRIES[:country_limit] if country_limit else COUNTRIES
     sections = []
-    total = len(COUNTRIES)
+    total = len(countries_to_run)
 
-    for i, country in enumerate(COUNTRIES, 1):
+    for i, country in enumerate(countries_to_run, 1):
         print(f"  [{i:02d}/{total}] Researching {country['flag']}  {country['name']} ...", flush=True)
         try:
             result = research_country(client, country, month, year)
@@ -423,10 +430,15 @@ def generate_newsletter(month: str, year: int):
             print(f"         💤 Waiting {SLEEP_BETWEEN_COUNTRIES}s before next country...", flush=True)
             time.sleep(SLEEP_BETWEEN_COUNTRIES)
 
-    print("  [Regional] Synthesizing cross-market briefing ...", flush=True)
-    regional = _generate_regional_briefing(client, sections)
-    regional_chart_url = build_regional_bar_url(sections)
-    print("         ✓ Done" if regional else "         ⚠  Skipped", flush=True)
+    if len(sections) >= 2:
+        print("  [Regional] Synthesizing cross-market briefing ...", flush=True)
+        regional = _generate_regional_briefing(client, sections)
+        regional_chart_url = build_regional_bar_url(sections)
+        print("         ✓ Done" if regional else "         ⚠  Skipped", flush=True)
+    else:
+        print("  [Regional] Skipped — need at least 2 countries for cross-market synthesis.", flush=True)
+        regional = None
+        regional_chart_url = ""
 
     generated_at = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
     html = build_html(
@@ -435,4 +447,10 @@ def generate_newsletter(month: str, year: int):
     )
     plain_text = build_plain_text(month, year, sections, regional=regional)
 
-    return html, plain_text
+    headline = ""
+    if regional and regional.get("headline"):
+        headline = regional["headline"].strip()
+    if not headline:
+        headline = f"APAC Cybersecurity — {month} {year} Monthly Retrospective"
+
+    return html, plain_text, headline
