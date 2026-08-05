@@ -1,0 +1,112 @@
+name: APAC Cybersecurity Newsletter
+
+on:
+  # ── Scheduled: 2nd of every month at 06:00 UTC ────────────────────────────
+  # (Runs after the 1st so the previous month's news has time to be indexed)
+  schedule:
+    - cron: "0 6 2 * *"
+
+  # ── Manual trigger from GitHub Actions UI ─────────────────────────────────
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — generate HTML but do not send email"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      country_limit:
+        description: "Limit to first N countries (blank = all 12). Use 1-2 for a cheap real-API test before a full run."
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  send-newsletter:
+    name: Generate & Send Newsletter
+    runs-on: ubuntu-latest
+    timeout-minutes: 60        # Claude + 12 web-search rounds can take ~20 min
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python ────────────────────────────────────────────────────────
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # ── 3. System dependencies for WeasyPrint (PDF infographic rendering) ──
+      # WeasyPrint needs Pango/Cairo/GDK-PixBuf as system libraries (pip alone
+      # can't install these) plus a colour-emoji font. Without the emoji font
+      # this step is harmless — the infographic simply doesn't use flag emoji
+      # (WeasyPrint can't reliably render multi-codepoint flag glyphs anyway).
+      - name: Install WeasyPrint system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 \
+            libcairo2 libffi-dev shared-mime-info fonts-dejavu-core \
+            fonts-noto-color-emoji
+
+      # ── 4. Python dependencies ───────────────────────────────────────────
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 5. Zero-cost structural smoke test (stubs the Claude API) ─────────
+      # Runs main.py's full --dry-run path against fake Claude responses.
+      # Catches signature mismatches, template bugs, and parsing errors
+      # BEFORE any real API calls happen. If this fails, the job stops here
+      # and no credits are spent.
+      - name: Smoke test pipeline (no API calls, no cost)
+        run: python smoke_test.py
+
+      # ── 6. Generate only (dry run) ───────────────────────────────────────
+      - name: Generate newsletter (dry run)
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_USER:        ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RECIPIENTS:        ${{ secrets.RECIPIENTS }}
+          COUNTRY_LIMIT:     ${{ github.event.inputs.country_limit }}
+        run: |
+          if [ -n "$COUNTRY_LIMIT" ]; then
+            echo "Running LIMITED dry run — first $COUNTRY_LIMIT countries only"
+            python main.py --dry-run --countries="$COUNTRY_LIMIT"
+          else
+            python main.py --dry-run
+          fi
+
+      # ── 7. Generate & send ───────────────────────────────────────────────
+      - name: Generate and send newsletter
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GMAIL_USER:         ${{ secrets.GMAIL_USER }}
+          RECIPIENTS:         ${{ secrets.RECIPIENTS }}
+          COUNTRY_LIMIT:      ${{ github.event.inputs.country_limit }}
+        run: |
+          if [ -n "$COUNTRY_LIMIT" ]; then
+            echo "⚠ Running LIMITED live send — first $COUNTRY_LIMIT countries only, subject line will be tagged [TEST]"
+            python main.py --countries="$COUNTRY_LIMIT"
+          else
+            python main.py
+          fi
+
+      # ── 8. Upload generated HTML + PDF as artifacts (90-day retention) ────
+      - name: Upload newsletter files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: newsletter-${{ github.run_id }}
+          path: |
+            newsletter_*.html
+            newsletter_*.pdf
+          retention-days: 90
