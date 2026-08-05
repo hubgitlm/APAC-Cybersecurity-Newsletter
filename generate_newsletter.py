@@ -1,45 +1,30 @@
 """
 generate_newsletter.py
-Calls Claude with web_search to research each country, then assembles the
-full HTML newsletter. Includes exponential backoff retry on 429 rate limit errors.
+Calls Claude (claude-sonnet-4-6) with web_search to research each country,
+then a Haiku call to synthesize a cross-market "Regional Executive Briefing",
+then assembles the full HTML newsletter.
 
-── Cost/token optimization notes ────────────────────────────────────────────
-- Research calls (12x, one per country) use MODEL_RESEARCH — needs real
-  writing quality + web search, so stays on a Sonnet-class model.
-- The Regional Briefing synthesis call (1x) uses MODEL_SYNTHESIS — a cheaper
-  model, since it's pure summarization of already-generated text, not fresh
-  research. This is the single biggest lever, since it also has the largest
-  input (all 12 country sections concatenated).
-- web_search max_uses caps searches per country. Web search is billed per
-  search ($10 / 1,000 searches) *in addition to* token cost, on top of the
-  token cost of the returned results — so this bounds both, not just tokens.
-- Prompt caching was evaluated but NOT enabled: the system prompt is well
-  under the 1,024-token minimum cacheable block size for Sonnet-class models,
-  so a cache_control breakpoint here would be silently ignored. Worth
-  revisiting only if ANALYST_SYSTEM grows substantially longer.
+Visual data model (Phase 1-2):
+  - Country prompts ask Claude to tag each incident/ransomware/threat-intel
+    <li> with a data-severity="critical|high|medium|low" attribute, and to
+    append a small ---METADATA--- JSON block after the HTML.
+  - generate_newsletter.py parses that HTML + metadata into a derived
+    per-country dict (severity_counts, category_counts, headline stats).
+  - QuickChart.io renders the small donut / stacked-bar charts on demand as
+    plain <img> URLs — no image hosting or base64 embedding required.
+
+Includes exponential backoff retry on 429 rate limit errors.
 """
 
 import anthropic
 import os
+import re
+import json
 import time
 import random
+import urllib.parse
 from datetime import datetime
 from email_template import build_html, build_plain_text
-
-# ── Model selection ──────────────────────────────────────────────────────────
-MODEL_RESEARCH   = "claude-sonnet-5"              # research + writing, needs web search
-MODEL_SYNTHESIS  = "claude-haiku-4-5-20251001"    # pure summarization, cheaper model is enough
-
-# Hard cap on searches per country call. Bounds both token cost (search
-# results are billed as input tokens) and the flat per-search fee. The prompt
-# suggests 5 search queries; this gives one spare without letting a country
-# spiral into an unbounded search loop.
-MAX_SEARCHES_PER_COUNTRY = 6
-
-# Safety cap on agentic tool-use round trips per country. With max_uses
-# already bounding search count, this rarely gets hit — it's a backstop
-# against runaway loops, not the primary cost lever.
-MAX_RESEARCH_ITERATIONS = 8
 
 # ── Countries & display config ──────────────────────────────────────────────
 COUNTRIES = [
@@ -60,40 +45,64 @@ COUNTRIES = [
 # Seconds to wait between countries (respects 30k tokens/min limit)
 SLEEP_BETWEEN_COUNTRIES = 60
 
+SEVERITY_ORDER  = ["critical", "high", "medium", "low"]
+SEVERITY_COLORS = {
+    "critical": "#f85149",
+    "high":     "#db6d28",
+    "medium":   "#d29922",
+    "low":      "#3fb950",
+}
+
+CATEGORY_SECTION_MAP = [
+    ("Major Incidents", "incidents"),
+    ("Ransomware", "ransomware"),
+    ("Regulatory", "regulatory"),
+    ("Threat Intelligence", "threat_intel"),
+]
+
 # ── System prompt ────────────────────────────────────────────────────────────
-ANALYST_SYSTEM = """You are a senior cybersecurity risk advisor writing a monthly briefing
-for company boards and executive leadership (CEOs, CFOs, general counsel, non-technical directors)
-across the Asia-Pacific region. Your reader oversees risk and capital — they do not configure
-firewalls and do not need to.
+ANALYST_SYSTEM = """You are a senior cybersecurity analyst writing a professional monthly newsletter
+for CISOs, security teams, and IT professionals across the Asia-Pacific region.
 
 Your writing style:
-- Business-first: lead every point with impact — cost, downtime, customer harm, legal/regulatory
-  exposure, share-price or reputational effect — not attack mechanics.
-- Plain English: if you must use a technical term (ransomware, zero-day, MFA, APT), immediately
-  explain it in one short clause a non-technical reader understands. Never use a CVE number,
-  malware family name, or technical jargon without that plain-English gloss attached.
-- Concise and authoritative — no fluff, no filler.
-- Factual: name real organisations and incidents, with dates, and be clear about financial or
-  operational scale where reported (cost, records affected, days of downtime, etc).
-- Frame regulation as exposure, not as a compliance bulletin: what does this new law or ruling
-  mean for a board's liability, disclosure obligations, or duty of care.
-- End with a decision the board should make or a question it should ask management — not a
-  technical instruction to an IT team.
+- Clear, authoritative, and concise — no fluff
+- Factual: cite incident names, affected organisations, dates, and CVE numbers where known
+- Balanced: cover both public/private sector incidents
+- Actionable: always end with a practical takeaway
 
-Output format is strict: your entire response must be ONLY the HTML structure below — starting
-immediately with the first <h3> tag. Never include meta-commentary about your own research
-process (e.g. "Now I have enough material to write..." or "Based on my research..."). Never
-include a title, heading, or any text before the first <h3> tag.
-
-When you write HTML, use ONLY these tags (no inline styles, no classes):
+When you write HTML, use ONLY these tags (no inline styles beyond what is specified below, no classes):
 <h3>, <h4>, <p>, <ul>, <li>, <strong>, <em>, <a href="...">, <hr>
 
+Every <li> inside "Major Incidents & Breaches", "Ransomware & Malware Activity" (only if you list
+specific campaigns), and "Threat Intelligence Highlights" MUST carry a data-severity attribute
+reflecting the real-world impact of that item, e.g.:
+<li data-severity="critical"><strong>Org Name</strong> — 12 Mar 2026. What happened...</li>
+
+Allowed severity values, choose the one that best matches the item: critical, high, medium, low.
+Base the rating on scale of impact (records exposed, sectors affected, criticality of systems),
+not on how dramatic the write-up sounds. Never omit data-severity from a tagged <li>.
+
 Never write <html>, <head>, <body>, <style>, or <script> tags.
-Never add disclaimers like "I am an AI". Write as the advisor directly.
+Never add disclaimers like "I am an AI". Write as the analyst directly.
+
+After the HTML, append a metadata block in exactly this format (real JSON, no markdown fences):
+
+---METADATA---
+{"headline_stat": {"value": "3", "label": "Major Incidents"}, "headline_stat_secondary": null, "trend_vs_last_month": "unknown"}
+---END---
+
+Rules for the metadata block:
+- headline_stat.value/label: the single most newsworthy count from this month (e.g. incident count,
+  breach count). Always populate this.
+- headline_stat_secondary: only populate with a real reported dollar/financial figure if one was
+  found in your research (e.g. {"value": "$14M", "label": "Estimated Losses"}). Otherwise use null.
+  Never invent a number.
+- trend_vs_last_month: always "unknown" unless you were explicitly given last month's figures to
+  compare against.
 """
 
 def country_prompt(country: str, month: str, year: int) -> str:
-    return f"""Search the web and write the board-level cybersecurity briefing section for **{country}** covering **{month} {year}**.
+    return f"""Search the web and write the cybersecurity retrospective section for **{country}** covering **{month} {year}**.
 
 Use web search to find real incidents. Search for terms like:
 - "{country} cyber attack {month} {year}"
@@ -102,71 +111,84 @@ Use web search to find real incidents. Search for terms like:
 - "{country} cybersecurity law regulation {month} {year}"
 - "{country} APT hacking {month} {year}"
 
-Then write the section in this exact HTML structure. Remember: this is for a board member,
-not a security engineer — every point should answer "why should a director in {country} care
-about this, and what could it cost the business?"
+Then write the section in this exact HTML structure:
 
 <h3>Executive Summary</h3>
-<p>[2-3 sentence overview of what mattered for businesses in {country} during {month} {year},
-in business-impact terms.]</p>
+<p>[2-3 sentence overview of the cybersecurity landscape in {country} during {month} {year}.]</p>
 
 <h3>Major Incidents &amp; Breaches</h3>
 <ul>
-  <li><strong>[Organisation / incident name]</strong> — [Date if known]. [What happened, in plain
-  English, and the business impact: cost, customers/records affected, downtime, reputational or
-  legal consequence.]</li>
+  <li data-severity="[critical|high|medium|low]"><strong>[Incident name / organisation]</strong> — [Date if known]. [What happened, scale, impact.]</li>
 </ul>
 
-<h3>Ransomware &amp; Extortion Activity</h3>
-<p>[What board members need to know about ransomware trends this month — in terms of business
-disruption risk, not technical campaign detail. If none reported, state that clearly.]</p>
+<h3>Ransomware &amp; Malware Activity</h3>
+<p>[Notable ransomware groups or malware campaigns. If none reported, state that clearly.]</p>
 
-<h3>Regulatory &amp; Legal Exposure</h3>
-<p>[New laws, guidelines, or enforcement actions — framed as what changes for board liability,
-disclosure timelines, or fines. If none, state that clearly.]</p>
+<h3>Regulatory &amp; Policy Updates</h3>
+<p>[New cybersecurity laws, guidelines, or enforcement actions. If none, state that clearly.]</p>
 
-<h3>Sector Watch</h3>
-<p>[Which industries in {country} were most targeted or most at risk this month, and why that
-matters for businesses in adjacent sectors.]</p>
+<h3>Threat Intelligence Highlights</h3>
+<p>[APT activity, CVEs, or sector-specific threats relevant to {country}.]</p>
 
-<h3>Board Takeaway</h3>
-<p>[One question the board should put to management, or one decision it should make, based on
-this month's developments in {country}.]</p>
+<h3>Key Takeaway for Organisations</h3>
+<p>[1-2 actionable sentences for organisations operating in {country}.]</p>
 
-<h3>Sources</h3>
+Then append the ---METADATA--- block as instructed in your system prompt.
+
+Be specific. Use real incident names from your search results."""
+
+
+# ── Regional briefing (Haiku, no web search — reasons over the digest only) ──
+REGIONAL_SYSTEM = """You are a senior cybersecurity analyst producing the lead section of a
+monthly APAC cybersecurity board briefing. You are given a compact digest of per-country
+severity counts, category counts, and executive summaries that another analyst already
+researched this month. You do not have web search — reason only from the digest provided.
+
+Write in this exact HTML structure, using ONLY these tags: <h3>, <p>, <ul>, <li>, <strong>.
+
+<h3>Regional Executive Briefing</h3>
+<p>[3-4 sentence cross-market synthesis of the region's cybersecurity posture this month.]</p>
 <ul>
-  <li><a href="[URL]">[Publication name — article title]</a></li>
+  <li><strong>Highest Severity:</strong> [country/countries] — [why, based on the digest].</li>
+  <li><strong>Cross-Border Pattern:</strong> [a shared threat actor, campaign, or vector appearing
+      in multiple countries' summaries, or "None identified" if genuinely none stands out].</li>
+  <li><strong>Regulatory Watch:</strong> [a regulatory pattern spanning multiple countries, or
+      "None identified"].</li>
 </ul>
 
-Be specific. Use real incident names from your search results. In the Sources section, list the
-actual URLs of the articles you found via web search that support the claims above — one link
-per source, most relevant first, no more than 5. Only include URLs you actually retrieved via
-search; never invent or guess a URL."""
+Then append exactly:
+---METADATA---
+{"regional_headline": "[a single punchy sentence, board-readable, summarising the region's risk this month]"}
+---END---
+
+Never invent incidents or figures not present in the digest. If the digest doesn't support a
+cross-border pattern or regulatory pattern, say "None identified" rather than fabricating one.
+Never add disclaimers like "I am an AI".
+"""
+
+def regional_prompt(digest: str) -> str:
+    return f"""Here is this month's per-country digest:
+
+{digest}
+
+Write the Regional Executive Briefing section as instructed in your system prompt."""
 
 
 # ── API call with exponential backoff retry ──────────────────────────────────
-def api_call_with_retry(
-    client, messages, system, max_retries=5,
-    use_web_search=True, model=MODEL_RESEARCH, max_tokens=2500,
-):
+def api_call_with_retry(client, messages, system, model="claude-sonnet-4-6",
+                         max_tokens=2500, tools=None, max_retries=5):
     """
     Wraps a Claude API call with exponential backoff on 429 errors.
     Waits 60s, 120s, 240s, 480s, 960s between retries.
     """
-    tools = (
-        [{"type": "web_search_20250305", "name": "web_search", "max_uses": MAX_SEARCHES_PER_COUNTRY}]
-        if use_web_search else []
-    )
+    kwargs = dict(model=model, max_tokens=max_tokens, system=system, messages=messages)
+    if tools:
+        kwargs["tools"] = tools
+
     for attempt in range(max_retries):
         try:
-            return client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                tools=tools,
-                messages=messages,
-            )
-        except anthropic.RateLimitError as e:
+            return client.messages.create(**kwargs)
+        except anthropic.RateLimitError:
             if attempt == max_retries - 1:
                 raise
             wait = (60 * (2 ** attempt)) + random.uniform(0, 10)
@@ -183,33 +205,115 @@ def api_call_with_retry(
                 raise
 
 
-# ── Defensive post-processing ────────────────────────────────────────────────
-def _strip_preamble(html: str) -> str:
-    """
-    Removes any stray text before the first <h3> tag. Even with an explicit
-    system-prompt instruction not to, models occasionally narrate their own
-    process first (e.g. "Now I have enough material to write..." or a stray
-    markdown title). This is a safety net, not the primary fix — the prompt
-    instruction is the primary fix; this catches what slips through.
-    Leaves content unchanged if no <h3> tag is found at all (better to show
-    unexpected content than silently return an empty string).
-    """
-    import re as _re
-    match = _re.search(r"<h3", html, _re.IGNORECASE)
-    return html[match.start():] if match else html
+# ── Parsing helpers ──────────────────────────────────────────────────────────
+def _extract_metadata(raw: str):
+    """Splits off the ---METADATA--- {...} ---END--- block. Returns (content, metadata_dict)."""
+    match = re.search(r"---METADATA---\s*(\{.*?\})\s*---END---", raw, re.DOTALL)
+    if not match:
+        return raw.strip(), {}
+    content = raw[:match.start()].strip()
+    try:
+        metadata = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        metadata = {}
+    return content, metadata
+
+
+def _parse_severity_counts(html: str) -> dict:
+    counts = {k: 0 for k in SEVERITY_ORDER}
+    for sev in re.findall(r'data-severity="(\w+)"', html):
+        sev = sev.lower()
+        if sev in counts:
+            counts[sev] += 1
+    return counts
+
+
+def _parse_category_counts(html: str) -> dict:
+    """Rough count of <li> items within each named h3 section."""
+    categories = {"incidents": 0, "ransomware": 0, "regulatory": 0, "threat_intel": 0}
+    chunks = re.split(r"<h3>", html)
+    for chunk in chunks:
+        for keyword, key in CATEGORY_SECTION_MAP:
+            if chunk.strip().startswith(keyword):
+                categories[key] = len(re.findall(r"<li", chunk))
+    return categories
+
+
+def _extract_executive_summary(html: str) -> str:
+    match = re.search(r"<h3>Executive Summary</h3>\s*<p[^>]*>(.*?)</p>", html, re.DOTALL)
+    if not match:
+        return ""
+    return re.sub(r"<[^>]+>", "", match.group(1)).strip()
+
+
+# ── QuickChart URL builders (no hosting needed — chart config lives in the URL) ──
+def _quickchart_url(chart_config: dict, width=140, height=140, bg="transparent") -> str:
+    encoded = urllib.parse.quote(json.dumps(chart_config, separators=(",", ":")))
+    return f"https://quickchart.io/chart?c={encoded}&backgroundColor={bg}&width={width}&height={height}&devicePixelRatio=2"
+
+
+def build_donut_chart_url(severity_counts: dict) -> str:
+    total = sum(severity_counts.values())
+    if total == 0:
+        return ""
+    config = {
+        "type": "doughnut",
+        "data": {
+            "labels": [s.capitalize() for s in SEVERITY_ORDER],
+            "datasets": [{
+                "data": [severity_counts.get(s, 0) for s in SEVERITY_ORDER],
+                "backgroundColor": [SEVERITY_COLORS[s] for s in SEVERITY_ORDER],
+                "borderWidth": 0,
+            }],
+        },
+        "options": {
+            "plugins": {"legend": {"display": False}, "datalabels": {"display": False}},
+            "cutoutPercentage": 68,
+        },
+    }
+    return _quickchart_url(config, width=120, height=120)
+
+
+def build_regional_bar_url(sections: list) -> str:
+    labels = [f"{c['flag']} {c['code']}" for c in sections]
+    datasets = [
+        {
+            "label": sev.capitalize(),
+            "data": [c["severity_counts"].get(sev, 0) for c in sections],
+            "backgroundColor": SEVERITY_COLORS[sev],
+        }
+        for sev in SEVERITY_ORDER
+    ]
+    config = {
+        "type": "bar",
+        "data": {"labels": labels, "datasets": datasets},
+        "options": {
+            "scales": {
+                "xAxes": [{"stacked": True, "ticks": {"fontColor": "#8b949e"}}],
+                "yAxes": [{"stacked": True, "ticks": {"fontColor": "#8b949e", "precision": 0}}],
+            },
+            "legend": {"position": "bottom", "labels": {"fontColor": "#e6edf3"}},
+        },
+    }
+    return _quickchart_url(config, width=640, height=280, bg="%230d1117")
 
 
 # ── Agentic research loop per country ───────────────────────────────────────
-def research_country(client: anthropic.Anthropic, country: dict, month: str, year: int) -> str:
+def research_country(client: anthropic.Anthropic, country: dict, month: str, year: int) -> dict:
     messages = [{"role": "user", "content": country_prompt(country["name"], month, year)}]
 
-    for iteration in range(MAX_RESEARCH_ITERATIONS):
-        response = api_call_with_retry(client, messages, ANALYST_SYSTEM, max_tokens=4000)
+    for _iteration in range(12):
+        response = api_call_with_retry(
+            client, messages, ANALYST_SYSTEM,
+            model="claude-sonnet-4-6", max_tokens=2500,
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+        )
 
         text_parts = [b.text for b in response.content if b.type == "text" and b.text.strip()]
 
         if response.stop_reason == "end_turn":
-            return _strip_preamble("\n".join(text_parts)) if text_parts else _fallback(country["name"], month, year)
+            raw = "\n".join(text_parts) if text_parts else None
+            return _build_country_result(raw, country["name"], month, year)
 
         messages.append({"role": "assistant", "content": response.content})
         tool_results = [
@@ -224,204 +328,75 @@ def research_country(client: anthropic.Anthropic, country: dict, month: str, yea
         if tool_results:
             messages.append({"role": "user", "content": tool_results})
         else:
-            return _strip_preamble("\n".join(text_parts)) if text_parts else _fallback(country["name"], month, year)
+            raw = "\n".join(text_parts) if text_parts else None
+            return _build_country_result(raw, country["name"], month, year)
 
-    return _fallback(country["name"], month, year)
+    return _build_country_result(None, country["name"], month, year)
 
 
-def _fallback(country: str, month: str, year: int) -> str:
-    return (
+def _build_country_result(raw, country: str, month: str, year: int) -> dict:
+    if not raw:
+        return _fallback(country, month, year)
+
+    content, metadata = _extract_metadata(raw)
+    if not content.strip():
+        return _fallback(country, month, year)
+
+    return {
+        "content": content,
+        "severity_counts": _parse_severity_counts(content),
+        "category_counts": _parse_category_counts(content),
+        "executive_summary": _extract_executive_summary(content),
+        "headline_stat": metadata.get("headline_stat"),
+        "headline_stat_secondary": metadata.get("headline_stat_secondary"),
+        "trend": metadata.get("trend_vs_last_month", "unknown"),
+    }
+
+
+def _fallback(country: str, month: str, year: int) -> dict:
+    content = (
         f"<h3>Executive Summary</h3>"
         f"<p>Cybersecurity data for {country} in {month} {year} could not be retrieved at this time. "
         f"Please consult national CERT advisories and threat intelligence feeds directly.</p>"
     )
+    return {
+        "content": content,
+        "severity_counts": {k: 0 for k in SEVERITY_ORDER},
+        "category_counts": {"incidents": 0, "ransomware": 0, "regulatory": 0, "threat_intel": 0},
+        "executive_summary": f"Data unavailable for {country} this month.",
+        "headline_stat": None,
+        "headline_stat_secondary": None,
+        "trend": "unknown",
+    }
 
 
-# ── Regional Briefing: cross-country synthesis (runs after all 12 countries) ─
-REGIONAL_SYSTEM = """You are a senior cybersecurity risk advisor producing the lead section of a
-monthly APAC-wide board briefing. You have already researched all 12 countries individually.
-Your job now is pure synthesis — do NOT search the web, do NOT introduce new incidents. Only
-draw conclusions from the country summaries you are given.
-
-Your reader is a board member or executive overseeing a multi-country APAC business. They want
-the regional pattern, not another repetition of the country details.
-
-Writing style: plain English, business-impact first, concise, no jargon without a gloss.
-
-Output format is strict. Your entire response must be exactly this, nothing else:
-
-Line 1: HEADLINE: [a short, complete sentence, 8-14 words, suitable as an email subject line,
-summarizing the single biggest regional story this month — not a sentence fragment, not
-truncated, no colon-separated clauses]
-
-Then, starting on the next line, the HTML body below — starting immediately with the first
-<h3> tag. Never include meta-commentary about your own process. Never include a markdown title,
-a "#" heading, or any text before "HEADLINE:" or between the HEADLINE line and the first <h3> tag.
-
-When you write HTML, use ONLY these tags (no inline styles, no classes):
-<h3>, <h4>, <p>, <ul>, <li>, <strong>, <em>, <hr>
-Never write <html>, <head>, <body>, <style>, or <script> tags.
-"""
-
-def _strip_sources(content: str) -> str:
-    """
-    Removes the <h3>Sources</h3>...<ul>...</ul> block from a country section
-    before it's fed into the Regional Briefing synthesis prompt. Source links
-    matter for the reader in the final email but add nothing to cross-country
-    pattern-spotting — stripping them meaningfully shrinks the input to the
-    single largest API call in the pipeline (12 sections concatenated).
-    """
-    import re as _re
-    return _re.sub(
-        r"<h3>\s*Sources\s*</h3>\s*<ul>.*?</ul>\s*",
-        "",
-        content,
-        flags=_re.IGNORECASE | _re.DOTALL,
-    )
-
-
-def _regional_prompt(month: str, year: int, sections: list) -> str:
-    digest = "\n\n".join(
-        f"### {c['name']}\n{_strip_sources(c['content'])}" for c in sections
-    )
-    return f"""Below are the 12 country briefings already written for {month} {year}. Read them and
-write a single "Regional Executive Briefing" synthesizing the cross-market picture. Do not restate
-every country — pull out the pattern.
-
-Remember the required output format: a "HEADLINE:" line first (short, complete sentence, 8-14
-words), then the HTML body starting immediately with the first <h3> tag — no other text anywhere.
-
-Structure the HTML body exactly like this:
-
-<h3>The Big Picture</h3>
-<p>[2-4 sentences: what was the defining regional theme this month across the 12 markets?]</p>
-
-<h3>Where the Risk Concentrated</h3>
-<ul>
-  <li>[A pattern spanning 2+ countries — e.g. a sector, attack type, or actor active in multiple
-  markets. Name the countries involved.]</li>
-</ul>
-
-<h3>Regulatory Direction of Travel</h3>
-<p>[Is regulation across the region converging or diverging this month — e.g. multiple countries
-tightening breach-notification rules, or one market moving out of step with its neighbours? What
-should a multi-country board take from that? Write this as complete sentences — do not cut off
-mid-thought.]</p>
-
-<h3>What the Board Should Watch</h3>
-<p>[The single most important cross-market takeaway for a board overseeing operations across
-APAC this month.]</p>
-
-Here are the country briefings:
-
-{digest}"""
-
-
-def _parse_regional_output(raw_text: str) -> tuple:
-    """
-    Splits the model's output into (headline, body_html).
-    Expects a first line 'HEADLINE: ...' followed by the HTML body. Falls back
-    gracefully if the model didn't follow the format exactly: headline becomes
-    "" (caller can fall back to a generic subject) and the whole text is
-    treated as body, with _strip_preamble cleaning up anything before the
-    first <h3> regardless.
-    """
-    import re as _re
-    match = _re.match(r"\s*HEADLINE:\s*(.+?)\s*\n(.*)", raw_text, _re.DOTALL | _re.IGNORECASE)
-    if match:
-        headline = match.group(1).strip()
-        body = match.group(2)
-    else:
-        headline = ""
-        body = raw_text
-    return headline, _strip_preamble(body)
-
-
-def synthesize_regional_briefing(client: anthropic.Anthropic, sections: list, month: str, year: int) -> tuple:
-    """Single non-agentic call (no web search) that synthesizes the 12 country
-    briefings into one regional executive summary, plus a short subject-line
-    headline parsed from the same response (no extra API call).
-
-    Tries MODEL_SYNTHESIS first (cheaper). If that call fails for any reason
-    (model access issue, transient error, etc.) it retries once on
-    MODEL_RESEARCH — the model that just successfully generated all 12
-    country sections, so we know it works for this account — before giving
-    up and returning the fallback text. Both failures are logged with full
-    detail so the real cause is visible in the GitHub Actions log, not just
-    the generic fallback message.
-
-    Returns (headline: str, briefing_html: str).
-    """
-    prompt = _regional_prompt(month, year, sections)
-    attempts = [
-        ("MODEL_SYNTHESIS", MODEL_SYNTHESIS, 2000),
-        ("MODEL_RESEARCH (fallback)", MODEL_RESEARCH, 2000),
+# ── Regional Executive Briefing (Haiku primary, Sonnet fallback) ────────────
+def _generate_regional_briefing(client: anthropic.Anthropic, sections: list):
+    digest_lines = [
+        f"{c['name']}: severity={c['severity_counts']}, categories={c['category_counts']}, "
+        f"summary=\"{c.get('executive_summary', '')}\""
+        for c in sections
     ]
+    digest = "\n".join(digest_lines)
+    prompt = regional_prompt(digest)
 
-    last_error = None
-    failed_labels = []
-    for label, model, max_tokens in attempts:
+    attempts = [("claude-haiku-4-5-20251001", 1200), ("claude-sonnet-4-6", 1200)]
+    for model, max_tokens in attempts:
         try:
             response = api_call_with_retry(
-                client,
-                [{"role": "user", "content": prompt}],
-                REGIONAL_SYSTEM,
-                use_web_search=False,
-                model=model,
-                max_tokens=max_tokens,
+                client, [{"role": "user", "content": prompt}], REGIONAL_SYSTEM,
+                model=model, max_tokens=max_tokens, tools=None, max_retries=2,
             )
-            text_parts = [b.text for b in response.content if b.type == "text" and b.text.strip()]
-            if text_parts:
-                if failed_labels:
-                    print(f"  ℹ  Regional briefing succeeded on {label} ({model}) "
-                          f"after {', '.join(failed_labels)} failed.")
-                headline, body = _parse_regional_output("\n".join(text_parts))
-                return headline, body
-            print(f"  ⚠  {label} ({model}) returned no text content — trying next option if available.")
-            failed_labels.append(label)
+            raw = "\n".join(b.text for b in response.content if b.type == "text" and b.text.strip())
+            content, metadata = _extract_metadata(raw)
+            if content.strip():
+                return {"content": content, "headline": metadata.get("regional_headline", "")}
+            print(f"    ⚠  Regional briefing from {model} was empty after parsing.")
         except Exception as e:
-            last_error = e
-            failed_labels.append(label)
-            print(f"  ⚠  Regional briefing synthesis failed on {label} ({model}): "
-                  f"{type(e).__name__}: {e}")
+            print(f"    ⚠  Regional briefing attempt failed ({model}): {e}")
 
-    if last_error is not None:
-        print(f"  ⚠  All regional briefing attempts failed. Last error: "
-              f"{type(last_error).__name__}: {last_error}")
-    return "", _regional_fallback(month, year)
-
-
-def _regional_fallback(month: str, year: int) -> str:
-    return (
-        f"<h3>The Big Picture</h3>"
-        f"<p>The regional synthesis for {month} {year} could not be generated this run. "
-        f"See the individual country briefings below for details.</p>"
-    )
-
-
-def extract_headline(regional_briefing: str, max_len: int = 90) -> str:
-    """
-    Fallback headline extractor, used only if the model didn't follow the
-    'HEADLINE: ...' output format (see _parse_regional_output). Pulls the
-    first full sentence out of 'The Big Picture' section. Returns "" rather
-    than a garbled mid-clause truncation if no clean sentence boundary exists
-    within max_len — main.py falls back to a fully generic subject line in
-    that case, which reads better than a cut-off fragment.
-    """
-    import re as _re
-    match = _re.search(
-        r"<h3>\s*The Big Picture\s*</h3>\s*<p>(.*?)</p>",
-        regional_briefing,
-        _re.IGNORECASE | _re.DOTALL,
-    )
-    if not match:
-        return ""
-
-    text = _re.sub(r"<[^>]+>", "", match.group(1)).strip()
-    first_sentence = _re.split(r"(?<=[.!?])\s+", text)[0].strip()
-    if len(first_sentence) <= max_len:
-        return first_sentence
-    return ""
+    print("    ⚠  Regional briefing omitted — all attempts failed.")
+    return None
 
 
 # ── Main entry point ─────────────────────────────────────────────────────────
@@ -434,30 +409,30 @@ def generate_newsletter(month: str, year: int):
     for i, country in enumerate(COUNTRIES, 1):
         print(f"  [{i:02d}/{total}] Researching {country['flag']}  {country['name']} ...", flush=True)
         try:
-            content = research_country(client, country, month, year)
+            result = research_country(client, country, month, year)
             print(f"         ✓ Done", flush=True)
         except Exception as e:
             print(f"         ⚠  Failed for {country['name']}: {e}")
-            content = _fallback(country["name"], month, year)
+            result = _fallback(country["name"], month, year)
 
-        sections.append({**country, "content": content})
+        section = {**country, **result}
+        section["chart_url"] = build_donut_chart_url(section["severity_counts"])
+        sections.append(section)
 
         if i < total:
             print(f"         💤 Waiting {SLEEP_BETWEEN_COUNTRIES}s before next country...", flush=True)
             time.sleep(SLEEP_BETWEEN_COUNTRIES)
 
-    print(f"  [--/--] Synthesizing Regional Executive Briefing ...", flush=True)
-    headline, regional_briefing = synthesize_regional_briefing(client, sections, month, year)
-    print(f"         ✓ Done", flush=True)
-
-    # Fallback chain: if the model didn't follow the HEADLINE: format for some
-    # reason, try parsing one out of the body text; main.py falls back to a
-    # fully generic subject if this also comes back empty.
-    if not headline:
-        headline = extract_headline(regional_briefing)
+    print("  [Regional] Synthesizing cross-market briefing ...", flush=True)
+    regional = _generate_regional_briefing(client, sections)
+    regional_chart_url = build_regional_bar_url(sections)
+    print("         ✓ Done" if regional else "         ⚠  Skipped", flush=True)
 
     generated_at = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
-    html       = build_html(month, year, sections, generated_at, regional_briefing)
-    plain_text = build_plain_text(month, year, sections, regional_briefing)
+    html = build_html(
+        month, year, sections, generated_at,
+        regional=regional, regional_chart_url=regional_chart_url,
+    )
+    plain_text = build_plain_text(month, year, sections, regional=regional)
 
-    return html, plain_text, headline
+    return html, plain_text
