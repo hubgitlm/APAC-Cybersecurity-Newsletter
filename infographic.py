@@ -49,6 +49,25 @@ SEVERITY_COLORS = {
 
 SEVERITY_RANK = ("critical", "high", "medium", "low")
 
+# Character budgets that keep page 1 guaranteed inside its available space at
+# the font sizes/widths set in the CSS below. Combined with the CSS
+# max-height + overflow:hidden backstops on the same elements, these two
+# layers together guarantee the PDF is always exactly 2 pages regardless of
+# how much text Claude writes in a given month.
+MAX_HEADLINE_CHARS   = 115   # ~2 lines at 20pt over a 220mm-wide block, with room for the ellipsis
+MAX_PARAGRAPH_CHARS  = 550   # ~6 lines at 11.5pt over a 210mm-wide block
+MAX_BULLET_CHARS     = 170   # ~6 lines at 9pt in a ~1/3-width column
+
+
+def _truncate(text: str, max_chars: int) -> str:
+    """Truncates on a word boundary and appends an ellipsis, so long-form
+    Claude output never silently overflows the fixed-size PDF layout."""
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars].rsplit(" ", 1)[0].rstrip(",.;:—-")
+    return cut + "…"
+
 
 def _dominant_severity(severity_counts: dict) -> str:
     for sev in SEVERITY_RANK:
@@ -149,14 +168,17 @@ def _country_tile(c: dict) -> str:
 def build_infographic_html(month: str, year: int, sections: list,
                             regional: dict = None, regional_chart_url: str = "") -> str:
     regional_content = (regional or {}).get("content", "")
-    headline = (regional or {}).get("headline", "") or f"APAC Cybersecurity — {month} {year} Snapshot"
-    synthesis_paragraph = _extract_synthesis_paragraph(regional_content) if regional else ""
+    raw_headline = (regional or {}).get("headline", "") or f"APAC Cybersecurity — {month} {year} Snapshot"
+    headline = _truncate(raw_headline, MAX_HEADLINE_CHARS)
+    synthesis_paragraph = _truncate(
+        _extract_synthesis_paragraph(regional_content) if regional else "", MAX_PARAGRAPH_CHARS
+    )
     bullets = _extract_regional_bullets(regional_content) if regional else []
     bullets_html = "\n".join(
         f'<div class="bullet">'
         f'{"<div class=\'bullet-divider\'></div>" if i > 0 else ""}'
         f'<span class="bullet-label">{label}</span>'
-        f'<span class="bullet-text">{text}</span></div>'
+        f'<span class="bullet-text">{_truncate(text, MAX_BULLET_CHARS)}</span></div>'
         for i, (label, text) in enumerate(bullets)
     )
     regional_chart_html = f'<img src="{regional_chart_url}" class="regional-chart">' if regional_chart_url else ""
@@ -200,9 +222,11 @@ def build_infographic_html(month: str, year: int, sections: list,
   .briefing {{ padding-top:6mm; }}
   .regional-headline {{
     font-size:20pt; font-weight:800; color:#ffffff; margin:0 0 6mm 0; line-height:1.3; max-width:220mm;
+    max-height:21mm; overflow:hidden;
   }}
   .regional-paragraph {{
     font-size:11.5pt; color:{TEXT_MAIN}; line-height:1.65; max-width:210mm; margin:0 0 8mm 0;
+    max-height:42mm; overflow:hidden;
   }}
   .watch-card {{
     background-color:{CARD_BG}; border:0.3mm solid {BORDER}; padding:7mm 9mm; display:flex; align-items:flex-start;
@@ -217,7 +241,7 @@ def build_infographic_html(month: str, year: int, sections: list,
     display:block; color:{YELLOW}; font-weight:800; font-size:8.5pt;
     text-transform:uppercase; letter-spacing:0.05em; margin-bottom:2.5mm;
   }}
-  .bullet-text {{ color:{TEXT_MAIN}; line-height:1.5; }}
+  .bullet-text {{ color:{TEXT_MAIN}; line-height:1.5; max-height:30mm; overflow:hidden; display:block; }}
   .regional-chart {{ width:60mm; height:auto; flex-shrink:0; margin-left:6mm; }}
 
   /* ── Page 2: Country grid ── */
