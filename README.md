@@ -37,9 +37,11 @@ main.py
     │       → QuickChart.io donut + stacked-bar charts (rendered on demand,
     │         no image hosting required)
     │
-    ├─► infographic.py  →  Builds a one-page landscape PDF snapshot
-    │       → regional headline + 3-point regional watch list
-    │       → 12-tile country grid, colour-coded by dominant severity
+    ├─► infographic.py  →  Builds a two-page landscape PDF snapshot
+    │       → page 1: regional headline, full board-level synthesis paragraph,
+    │         3-column regional watch list
+    │       → page 2: 12-tile country grid — dominant severity, headline stat,
+    │         top named incident, severity breakdown per tile
     │       → rendered with WeasyPrint (pure Python, no headless browser)
     │
     └─► send_email.py  →  Gmail SMTP → Recipients (subject = regional headline,
@@ -88,15 +90,37 @@ on forward.
 
 ## Infographic PDF Snapshot
 
-Every run also generates a **one-page landscape PDF** — a board-readable snapshot
+Every run also generates a **two-page landscape PDF** — a board-readable snapshot
 of the entire newsletter — and attaches it to the email alongside the HTML body.
 
-**What's on it:**
-- Regional headline (same one used as the email subject)
-- The 3-point Regional Watch list (Highest Severity / Cross-Border Pattern / Regulatory Watch)
-- A 12-tile grid, one per country, colour-coded by that country's most severe
-  incident this month (red = critical present, orange = high, yellow = medium, green = low)
+**Page 1 — Regional Executive Briefing:**
+- Section label, regional headline (same one used as the email subject), and the
+  full board-level synthesis paragraph Claude writes for the Regional Briefing
+- The 3-column Regional Watch list (Highest Severity / Cross-Border Pattern /
+  Regulatory Watch), separated by yellow divider rules, in a bordered card
+
+**Page 2 — Country Breakdown:**
+- A 12-tile grid, one per country, each with a circular badge ringed in that
+  country's dominant severity colour (red = critical present, orange = high,
+  yellow = medium, green = low)
 - Each tile's headline stat (e.g. "4 Major Incidents") and severity donut
+- The **top (most severe) named incident** for that country, pulled from the
+  same `data-severity`-tagged `<li>` elements used for the severity pills in
+  the HTML email
+- A compact severity breakdown line (e.g. "1 Critical &middot; 2 High &middot; 1 Medium")
+
+Both pages share the same header (badge/title/subtitle/rule) and yellow footer
+band, pinned to the bottom of each page via a flexbox layout regardless of how
+much content is on that page.
+
+**Visual language:** black/near-navy background (`#0e1526`) with a bold yellow
+(`#f8e71c`) brand accent used purely for structural elements — rules, badges,
+stat numbers, the footer band — kept deliberately separate from the
+red/orange/amber/green severity palette so risk signal isn't diluted by the
+brand colour. Modelled after a Canva design explored earlier in this project;
+rebuilt natively in WeasyPrint after Canva's Autofill automation turned out to
+require a Teams/Enterprise-tier plan not worth the cost for a single monthly
+newsletter (see project history for that evaluation).
 
 **How it's built:** `infographic.py` builds the layout as HTML/CSS and renders it
 to PDF with [WeasyPrint](https://doc.courtbouillon.org/weasyprint/) — a pure-Python
@@ -117,6 +141,7 @@ without an attachment. The HTML email is always the primary deliverable.
 **Filename:** `newsletter_<month>_<year>_snapshot.pdf` (or with `_partialN` if
 run with `--countries=N`), uploaded as part of the same GitHub Actions artifact
 as the HTML file.
+
 
 ---
 
@@ -292,10 +317,15 @@ Use [crontab.guru](https://crontab.guru) to build cron expressions.
 
 ### PDF snapshot customisation
 
-Edit `infographic.py` — `build_infographic_html()` controls the layout,
-`SEVERITY_COLORS` controls the tile accent colours (same dict pattern as
-`generate_newsletter.py`). If you change the Regional Briefing's `<ul>`
-structure, also check `_extract_regional_bullets()` stays in sync.
+Edit `infographic.py` — `build_infographic_html()` controls the two-page layout,
+`YELLOW`/`DARK_BG`/`CARD_BG` control the brand palette and `SEVERITY_COLORS`
+controls the per-tile risk colours (both defined locally in `infographic.py`,
+separate from `generate_newsletter.py`'s own copy used for chart colours). If
+you change the Regional Briefing's `<h3>`/`<p>`/`<ul>` structure in
+`generate_newsletter.py`, check `_extract_synthesis_paragraph()` and
+`_extract_regional_bullets()` in `infographic.py` stay in sync — both parse
+that HTML by pattern-matching the exact tag structure Claude is prompted to
+produce.
 
 ---
 

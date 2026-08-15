@@ -148,7 +148,11 @@ researched this month. You do not have web search — reason only from the diges
 Write in this exact HTML structure, using ONLY these tags: <h3>, <p>, <ul>, <li>, <strong>.
 
 <h3>Regional Executive Briefing</h3>
-<p>[3-4 sentence cross-market synthesis of the region's cybersecurity posture this month.]</p>
+<p>[3-4 sentence cross-market synthesis of the region's cybersecurity posture this month. Write for
+a board of directors, not a security team: plain business language, no unexplained technical jargon
+(gloss any term you must use), and frame implications in terms of business risk, liability, and
+operational impact rather than technical mechanics. This paragraph is displayed on its own on a
+board-briefing document, so it must stand alone and read as a complete executive summary.]</p>
 <ul>
   <li><strong>Highest Severity:</strong> [country/countries] — [why, based on the digest].</li>
   <li><strong>Cross-Border Pattern:</strong> [a shared threat actor, campaign, or vector appearing
