@@ -42,10 +42,10 @@ TREND_ARROWS = {
 SECTION_ICONS = {
     "Executive Summary": "📋",
     "Major Incidents &amp; Breaches": "🛡",
-    "Ransomware &amp; Malware Activity": "🦠",
-    "Regulatory &amp; Policy Updates": "⚖",
-    "Threat Intelligence Highlights": "🎯",
-    "Key Takeaway for Organisations": "✅",
+    "Ransomware &amp; Extortion Activity": "🦠",
+    "Regulatory &amp; Legal Exposure": "⚖",
+    "Threat Intelligence &amp; Sector Risk": "🎯",
+    "Board Takeaway": "✅",
     "Regional Executive Briefing": "🌏",
 }
 
@@ -268,7 +268,7 @@ def build_html(month: str, year: int, sections: list, generated_at: str,
   <!-- Footer -->
   <div style="{_FOOTER_STYLE}">
     <p style="margin:0 0 4px 0;color:{TEXT_MUTED};">APAC Cybersecurity Newsletter &nbsp;&middot;&nbsp; {month} {year}</p>
-    <p style="margin:0 0 8px 0;color:{TEXT_MUTED};">Generated {generated_at} &nbsp;&middot;&nbsp; Powered by Claude + Web Search</p>
+    <p style="margin:0 0 8px 0;color:{TEXT_MUTED};">Generated {generated_at}</p>
     <p style="font-size:11px;color:#555555;margin:0;">
       This newsletter is for informational purposes only. Verify all incidents with primary sources
       before acting on any information contained herein.

@@ -49,17 +49,21 @@ main.py
 ```
 
 Each country section includes:
-- **Executive Summary** — what mattered this month
-- **Major Incidents & Breaches** — named incidents, dates, impact, each tagged
-  with a severity level (critical / high / medium / low)
-- **Ransomware & Malware Activity** — active campaigns
-- **Regulatory & Policy Updates** — laws, advisories, enforcement
-- **Threat Intelligence Highlights** — APTs, CVEs, sector threats
-- **Key Takeaway** — actionable guidance for organisations
+- **Executive Summary** — what mattered for businesses this month, in business terms
+- **Major Incidents & Breaches** — named incidents, dates, and business impact (cost, records
+  affected, downtime), each tagged with a severity level (critical / high / medium / low)
+- **Ransomware & Extortion Activity** — business disruption risk, explained in plain English
+- **Regulatory & Legal Exposure** — new laws/enforcement, framed as board liability and
+  disclosure exposure
+- **Threat Intelligence & Sector Risk** — which industries were most targeted this month, and
+  why that matters for adjacent sectors
+- **Board Takeaway** — one question or decision for the board, not a technical action item
 
 A **Regional Executive Briefing** sits above the country sections and aggregates
 patterns across all 12 markets — shared threat actors, regulatory trends, and
-which markets had the sharpest severity spike this month.
+which markets had the sharpest severity spike this month. Both the regional briefing and every
+country section are written for the same board/executive audience, in the same plain-English,
+business-impact-first voice — deliberately consistent top to bottom.
 
 ---
 

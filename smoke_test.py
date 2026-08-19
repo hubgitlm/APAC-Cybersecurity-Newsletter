@@ -34,18 +34,18 @@ COUNTRY_RAW = """<h3>Executive Summary</h3>
   <li data-severity="medium"><strong>Test Bank</strong> — 5 Jan 2026. Simulated incident for testing.</li>
 </ul>
 
-<h3>Ransomware &amp; Malware Activity</h3>
+<h3>Ransomware &amp; Extortion Activity</h3>
 <p>No significant activity reported (simulated).</p>
 
-<h3>Regulatory &amp; Policy Updates</h3>
+<h3>Regulatory &amp; Legal Exposure</h3>
 <p>No significant updates reported (simulated).</p>
 
-<h3>Threat Intelligence Highlights</h3>
+<h3>Threat Intelligence &amp; Sector Risk</h3>
 <ul>
   <li data-severity="high"><strong>Test APT</strong> — simulated threat intel item.</li>
 </ul>
 
-<h3>Key Takeaway for Organisations</h3>
+<h3>Board Takeaway</h3>
 <p>This is a simulated takeaway for smoke-test purposes.</p>
 
 ---METADATA---
@@ -80,10 +80,17 @@ class _FakeResponse:
 
 
 def _fake_create(self, **kwargs):
-    system = kwargs.get("system", "")
-    if "Regional Executive Briefing" in system:
-        return _FakeResponse(REGIONAL_RAW)
-    return _FakeResponse(COUNTRY_RAW)
+    # Route on the real structural difference between the two call sites,
+    # not prompt wording: research_country() always passes tools=[web_search],
+    # _generate_regional_briefing() always passes tools=None. Matching on
+    # system-prompt text content is fragile — a prompt edit that happens to
+    # mention the other section's name (as ANALYST_SYSTEM legitimately does,
+    # to describe tone consistency) can silently misroute the stub and mask
+    # real bugs. This happened once already; keying off `tools` instead of
+    # text content is what fixed it.
+    if kwargs.get("tools"):
+        return _FakeResponse(COUNTRY_RAW)
+    return _FakeResponse(REGIONAL_RAW)
 
 
 def _report(checks: dict) -> bool:
