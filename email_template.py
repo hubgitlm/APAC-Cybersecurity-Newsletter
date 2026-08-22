@@ -17,26 +17,30 @@ Compatibility strategy:
 
 import re
 
-# ── Colour palette ───────────────────────────────────────────────────────────
-DARK_BG    = "#0d1117"
-CARD_BG    = "#161b22"
-BORDER     = "#21262d"
-ACCENT     = "#58a6ff"
-TEXT_MAIN  = "#e6edf3"
-TEXT_MUTED = "#8b949e"
+# ── Institutional palette ─────────────────────────────────────────────────
+# Matches infographic.py — white page, off-white card panels, thin borders,
+# single muted navy accent, muted severity colours — so the PDF snapshot
+# and the full HTML email read as one consistent publication rather than
+# two different colour systems.
+PAGE_BG    = "#ffffff"
+CARD_BG    = "#f6f7f9"
+BORDER     = "#dde1e8"
+ACCENT     = "#1d3461"
+TEXT_MAIN  = "#1b2436"
+TEXT_MUTED = "#5a6478"
 
 SEVERITY_COLORS = {
-    "critical": "#f85149",
-    "high":     "#db6d28",
-    "medium":   "#d29922",
-    "low":      "#3fb950",
+    "critical": "#a13529",
+    "high":     "#b0692c",
+    "medium":   "#9c7f2a",
+    "low":      "#2f7a52",
 }
 
 TREND_ARROWS = {
-    "up":      ("▲", "#f85149"),
-    "down":    ("▼", "#3fb950"),
-    "flat":    ("→", "#8b949e"),
-    "unknown": ("", "#8b949e"),
+    "up":      ("▲", SEVERITY_COLORS["critical"]),
+    "down":    ("▼", SEVERITY_COLORS["low"]),
+    "flat":    ("→", TEXT_MUTED),
+    "unknown": ("", TEXT_MUTED),
 }
 
 SECTION_ICONS = {
@@ -52,7 +56,7 @@ SECTION_ICONS = {
 
 # ── Inline-style constants ───────────────────────────────────────────────────
 _BODY_STYLE = (
-    f"margin:0;padding:0;background-color:{DARK_BG};color:{TEXT_MAIN};"
+    f"margin:0;padding:0;background-color:{PAGE_BG};color:{TEXT_MAIN};"
     "font-family:'Segoe UI',Helvetica,Arial,sans-serif;"
     "font-size:15px;line-height:1.7;-webkit-text-size-adjust:100%;"
 )
@@ -62,11 +66,11 @@ _HEADER_STYLE = (
     "padding:32px 36px;margin-bottom:24px;"
 )
 _BADGE_STYLE = (
-    f"display:inline-block;background-color:{ACCENT};color:#000000;"
+    f"display:inline-block;color:{ACCENT};"
     "font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;"
-    "padding:3px 10px;border-radius:4px;margin-bottom:14px;"
+    f"padding:0 0 4px 0;margin-bottom:14px;border-bottom:2px solid {ACCENT};"
 )
-_TITLE_STYLE = "font-size:26px;font-weight:800;color:#ffffff;line-height:1.2;margin:0 0 8px 0;"
+_TITLE_STYLE = f"font-size:26px;font-weight:700;color:{TEXT_MAIN};line-height:1.2;margin:0 0 8px 0;"
 _SUBTITLE_STYLE = f"color:{TEXT_MUTED};font-size:14px;margin:0;"
 
 _TOC_BOX_STYLE = (
@@ -78,7 +82,7 @@ _TOC_LABEL_STYLE = (
     f"color:{TEXT_MUTED};margin:0 0 10px 0;"
 )
 _TOC_TILE_STYLE = (
-    f"display:inline-block;background-color:{DARK_BG};border:1px solid {BORDER};"
+    f"display:inline-block;background-color:{PAGE_BG};border:1px solid {BORDER};"
     f"border-radius:6px;padding:8px 14px;margin:0 8px 8px 0;text-decoration:none;"
     f"color:{TEXT_MAIN};font-size:13px;"
 )
@@ -95,26 +99,26 @@ _FLAG_CELL_STYLE = (
     "display:table-cell;vertical-align:middle;font-size:28px;line-height:1;padding-right:10px;"
     "font-family:'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Twemoji Mozilla',sans-serif;"
 )
-_NAME_CELL_STYLE = "display:table-cell;vertical-align:middle;font-size:20px;font-weight:800;color:#ffffff;"
+_NAME_CELL_STYLE = f"display:table-cell;vertical-align:middle;font-size:20px;font-weight:700;color:{TEXT_MAIN};"
 
 _STAT_CARD_STYLE = (
-    f"display:table;width:100%;background-color:{DARK_BG};border:1px solid {BORDER};"
+    f"display:table;width:100%;background-color:{PAGE_BG};border:1px solid {BORDER};"
     "border-radius:8px;padding:14px 18px;margin-bottom:18px;"
 )
-_STAT_VALUE_STYLE = "font-size:22px;font-weight:800;color:#ffffff;"
+_STAT_VALUE_STYLE = f"font-size:22px;font-weight:800;color:{ACCENT};"
 _STAT_LABEL_STYLE = f"font-size:11px;color:{TEXT_MUTED};text-transform:uppercase;letter-spacing:.04em;"
 _STAT_CELL_STYLE = "display:table-cell;vertical-align:middle;"
 
 _SEVERITY_PILL_STYLE = (
     "display:inline-block;font-size:10px;font-weight:800;letter-spacing:.05em;"
-    "text-transform:uppercase;padding:2px 8px;border-radius:10px;margin-right:8px;color:#0d1117;"
+    "text-transform:uppercase;padding:2px 8px;border-radius:10px;margin-right:8px;color:#ffffff;"
 )
 
 _REGIONAL_STYLE = (
     f"background-color:{CARD_BG};border:1px solid {ACCENT};border-radius:10px;"
     "padding:28px 32px;margin-bottom:24px;"
 )
-_REGIONAL_HEADLINE_STYLE = "font-size:18px;font-weight:800;color:#ffffff;margin:0 0 16px 0;"
+_REGIONAL_HEADLINE_STYLE = f"font-size:18px;font-weight:700;color:{TEXT_MAIN};margin:0 0 16px 0;"
 
 _FOOTER_STYLE = f"text-align:center;padding:24px 0;color:{TEXT_MUTED};font-size:12px;"
 
@@ -127,7 +131,7 @@ _TAG_STYLES = {
     "p":  f"color:{TEXT_MAIN};margin:0 0 10px 0;",
     "ul": "padding-left:18px;margin:0 0 12px 0;",
     "li": f"color:{TEXT_MAIN};margin-bottom:6px;",
-    "strong": "color:#ffffff;",
+    "strong": f"color:{TEXT_MAIN};",
     "hr": f"border:none;border-top:1px solid {BORDER};margin:28px 0;",
     "a":  f"color:{ACCENT};",
 }
@@ -139,7 +143,7 @@ def _style_severity_li(html_fragment: str) -> str:
     def repl(m):
         sev = m.group(1).lower()
         inner = m.group(2)
-        color = SEVERITY_COLORS.get(sev, "#8b949e")
+        color = SEVERITY_COLORS.get(sev, TEXT_MUTED)
         pill = f'<span style="{_SEVERITY_PILL_STYLE}background-color:{color};">{sev}</span>'
         return f"<li>{pill}{inner}</li>"
     return re.sub(r'<li data-severity="(\w+)">(.*?)</li>', repl, html_fragment, flags=re.DOTALL)
@@ -190,7 +194,7 @@ def _stat_card(c: dict) -> str:
         <div style="{_STAT_LABEL_STYLE}">{secondary.get('label', '')}</div>
       </div>""")
 
-    arrow, arrow_color = TREND_ARROWS.get(c.get("trend", "unknown"), ("", "#8b949e"))
+    arrow, arrow_color = TREND_ARROWS.get(c.get("trend", "unknown"), ("", TEXT_MUTED))
     if arrow:
         cells.append(f"""
       <div style="{_STAT_CELL_STYLE}padding-left:14px;color:{arrow_color};font-size:16px;">{arrow}</div>""")
@@ -222,7 +226,7 @@ def build_html(month: str, year: int, sections: list, generated_at: str,
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light">
   <title>APAC Cybersecurity Newsletter — {month} {year}</title>
   <style>
     body, table, td, p, a, h1, h2, h3, h4, ul, li {{ margin:0; padding:0; border:0; }}
@@ -231,7 +235,7 @@ def build_html(month: str, year: int, sections: list, generated_at: str,
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
       }}
-      body {{ background-color:{DARK_BG} !important; color:{TEXT_MAIN} !important; }}
+      body {{ background-color:{PAGE_BG} !important; color:{TEXT_MAIN} !important; }}
       .no-break {{ page-break-inside: avoid; break-inside: avoid; }}
       .toc-box {{ display:none; }}
     }}
