@@ -13,6 +13,19 @@ Visual data model (Phase 1-2):
   - QuickChart.io renders the small donut / stacked-bar charts on demand as
     plain <img> URLs — no image hosting or base64 embedding required.
 
+Reliability layers (added after the July 2026 issue shipped with leaked
+process narration and several mid-sentence truncations):
+  1. Prompt-level: both system prompts explicitly forbid narration and
+     markdown code fences.
+  2. Per-response: _clean_content() strips anything before the first <h3>
+     structurally (not by matching wording); _is_complete_country_section() /
+     _is_complete_regional_section() / _ends_with_terminal_punctuation()
+     reject any response that's missing a required heading or stops
+     mid-sentence, falling back to clean placeholder content instead.
+  3. Pre-send gate: validate_assembled_newsletter() runs once more over the
+     fully stitched-together HTML as a final, independent check before
+     main.py is allowed to call send_newsletter().
+
 Includes exponential backoff retry on 429 rate limit errors.
 """
 
@@ -47,11 +60,17 @@ COUNTRIES = [
 SLEEP_BETWEEN_COUNTRIES = 60
 
 SEVERITY_ORDER  = ["critical", "high", "medium", "low"]
+# Muted, institutional-report palette rather than saturated "security
+# product" tones — desaturated red/orange/gold/green that still carries
+# clear severity signal (colour-coded risk indicators are standard in
+# McKinsey/Deloitte-style research) without reading as a SIEM dashboard.
+# Kept identical across generate_newsletter.py, infographic.py, and
+# email_template.py so charts, pills, and tiles all agree visually.
 SEVERITY_COLORS = {
-    "critical": "#f85149",
-    "high":     "#db6d28",
-    "medium":   "#d29922",
-    "low":      "#3fb950",
+    "critical": "#a13529",
+    "high":     "#b0692c",
+    "medium":   "#9c7f2a",
+    "low":      "#2f7a52",
 }
 
 CATEGORY_SECTION_MAP = [
@@ -71,8 +90,49 @@ for the same board audience.
 Your writing style:
 - Business-first: lead every point with impact — cost, downtime, customer harm, legal/regulatory
   exposure, reputational effect — not attack mechanics.
-- Plain English: if you must use a technical term (ransomware, zero-day, MFA, APT), immediately
-  gloss it in one short clause a non-technical reader understands.
+- Plain English: if you must use a technical term (ransomware, zero-day, MFA, APT, double-extortion,
+  RaaS, supply-chain risk, credential-based attack, OT/ICS), immediately gloss it in one short clause
+  a non-technical reader understands — every time it first appears in THIS section, even if you
+  believe an earlier country's section already defined it. Each country section is read
+  independently and must stand alone. Where the term appears in the STANDARD GLOSSARY below, use
+  that exact definition (or a very close paraphrase of it) rather than improvising your own wording
+  — this keeps definitions worded consistently across all twelve countries in the same issue, so a
+  reader who jumps between sections isn't given two different explanations of the same term.
+
+STANDARD GLOSSARY — use these definitions verbatim or near-verbatim on first use of each term:
+- Ransomware: malicious software that locks an organisation's systems and/or steals its data, then
+  demands payment to restore access or to prevent the data being published.
+- Double-extortion: when attackers both encrypt a victim's systems AND steal data before demanding
+  payment — meaning restoring from backup alone does not remove the risk of stolen data being leaked.
+- Ransomware-as-a-Service (RaaS): a criminal business model where ransomware tools are rented out to
+  other attackers, which is why the same ransomware "brand" can strike many unrelated victims at once.
+- Zero-day: a software flaw that attackers exploit before the vendor has issued a fix, meaning no
+  patch was available at the time of the attack.
+- Multi-factor authentication (MFA): a login security step beyond a password (e.g. a code sent to a
+  phone) that significantly reduces the risk of a stolen password being used to break in.
+- Advanced Persistent Threat (APT): a sophisticated, typically state-linked attacker group that
+  maintains long-term, hard-to-detect access to a target's systems, usually for espionage rather than
+  quick financial gain.
+- OT/ICS (Operational Technology / Industrial Control Systems): the computer systems that run
+  physical equipment — power grids, factory lines, water treatment — where an attack can cause
+  physical disruption or a safety incident, not just data loss.
+- Supply-chain risk: exposure that comes from a vendor, contractor, or software provider being
+  compromised, even when the organisation's own systems were never directly breached.
+- Credential-based attack: an intrusion that starts from a stolen, guessed, or purchased password or
+  login session, rather than a technical flaw in software.
+- Phishing: deceptive emails or messages designed to trick an employee into revealing credentials or
+  installing malicious software.
+- DDoS (Distributed Denial-of-Service): flooding a website or system with traffic to knock it
+  offline — disrupting service rather than stealing data.
+- Data exfiltration: the unauthorised copying or removal of data from an organisation's systems —
+  often the real risk in a ransomware incident, distinct from the systems being locked.
+- Dark web: hidden parts of the internet, not indexed by ordinary search engines, often used by
+  criminals to sell stolen data or coordinate attacks.
+- Third-party/vendor risk: exposure that arises because a supplier, contractor, or service provider
+  holding an organisation's data or with access to its systems has been compromised.
+- Business Email Compromise (BEC): a scam where attackers impersonate an executive or supplier by
+  email to trick staff into making a fraudulent payment or transfer.
+
 - Clear, authoritative, and concise — no fluff.
 - Factual: cite incident names, affected organisations, dates, and financial/operational scale
   where reported (cost, records affected, days of downtime) — not CVE numbers or technical
@@ -95,6 +155,12 @@ not on how dramatic the write-up sounds. Never omit data-severity from a tagged 
 
 Never write <html>, <head>, <body>, <style>, or <script> tags.
 Never add disclaimers like "I am an AI". Write as the advisor directly.
+
+CRITICAL OUTPUT RULE: Your response must contain ONLY the HTML section content described below,
+followed by the metadata block. Do not narrate your research process, do not describe what you are
+about to do or have just done (e.g. "I'll search for...", "Let me compile...", "I now have..."), and
+do not wrap the output in markdown code fences (no ``` anywhere in your response). Your first
+character must be the opening `<` of the first `<h3>` tag — nothing before it.
 
 After the HTML, append a metadata block in exactly this format (real JSON, no markdown fences):
 
@@ -145,7 +211,13 @@ disclosure timelines, or fines. If none, state that clearly.]</p>
 
 <h3>Threat Intelligence &amp; Sector Risk</h3>
 <p>[Which industries in {country} were most targeted or most at risk this month, and why that
-matters for businesses in adjacent sectors — plain English, no unexplained technical jargon.]</p>
+matters for businesses in adjacent sectors — plain English, no unexplained technical jargon.
+Structure this section to explicitly address, where the month's research supports it: financial
+services; healthcare (framed around patient safety and care continuity, not only data privacy);
+energy, utilities & transport (framed around physical/operational safety and service continuity
+where relevant — not only IT breach impact); and government & public sector. Do not let financial
+services crowd out the other three — if a sector had no material development this month, say so in
+one short clause rather than omitting it entirely.]</p>
 
 <h3>Board Takeaway</h3>
 <p>[One question the board should put to management, or one decision it should make, based on
@@ -184,9 +256,19 @@ Then append exactly:
 {"regional_headline": "[a single punchy sentence, board-readable, summarising the region's risk this month]"}
 ---END---
 
+The regional_headline must be a genuinely short, complete sentence — 100 characters or fewer,
+including spaces. It appears on its own on a one-page printed snapshot with no room to wrap beyond
+two lines, so do not write a long compound sentence and expect it to be cut off; write it short in
+the first place.
+
 Never invent incidents or figures not present in the digest. If the digest doesn't support a
 cross-border pattern or regulatory pattern, say "None identified" rather than fabricating one.
 Never add disclaimers like "I am an AI".
+
+CRITICAL OUTPUT RULE: Your response must contain ONLY the HTML content described above, followed by
+the metadata block. Do not narrate your process (no "Let me compile...", "I now have..."), and do
+not wrap your output in markdown code fences. Your first character must be the opening `<` of
+`<h3>Regional Executive Briefing</h3>` — nothing before it.
 """
 
 def regional_prompt(digest: str) -> str:
@@ -229,6 +311,70 @@ def api_call_with_retry(client, messages, system, model="claude-sonnet-4-6",
 
 
 # ── Parsing helpers ──────────────────────────────────────────────────────────
+
+REQUIRED_COUNTRY_HEADINGS = [
+    "<h3>Executive Summary</h3>",
+    "<h3>Major Incidents &amp; Breaches</h3>",
+    "<h3>Ransomware &amp; Extortion Activity</h3>",
+    "<h3>Regulatory &amp; Legal Exposure</h3>",
+    "<h3>Threat Intelligence &amp; Sector Risk</h3>",
+    "<h3>Board Takeaway</h3>",
+]
+
+_CODE_FENCE_RE = re.compile(r"```(?:html)?", re.IGNORECASE)
+
+
+def _clean_content(raw: str) -> str:
+    """
+    Strips process narration ("I'll run all five searches...", "Let me
+    compile...") and stray markdown code fences that sometimes wrap
+    Claude's HTML output, using STRUCTURE as the anchor point rather than
+    matching on wording — consistent with how the smoke-test stub routes on
+    the `tools` kwarg instead of prompt text (a wording-based filter is
+    fragile and silently breaks the next time Claude phrases the same
+    narration slightly differently).
+
+    The prompt contract guarantees real content always starts with the
+    first <h3> tag, so anything before that first <h3> — preamble sentences
+    or a leading ```html fence — is always safe to discard.
+    """
+    text = _CODE_FENCE_RE.sub("", raw).strip()
+    first_heading = text.find("<h3")
+    if first_heading > 0:
+        text = text[first_heading:]
+    return text.strip()
+
+
+def _is_complete_country_section(content: str) -> bool:
+    """Structural completeness check: every required heading must be
+    present. Catches truncation (stop_reason == 'max_tokens') even when the
+    response still parses as non-empty HTML — a partial section with 4 of 6
+    headings is not something we ship to a board audience."""
+    return all(h in content for h in REQUIRED_COUNTRY_HEADINGS)
+
+
+def _is_complete_regional_section(content: str) -> bool:
+    return (
+        "<h3>Regional Executive Briefing</h3>" in content
+        and "Highest Severity" in content
+        and "Cross-Border Pattern" in content
+        and "Regulatory Watch" in content
+    )
+
+
+def _ends_with_terminal_punctuation(content: str) -> bool:
+    """
+    A section that hit max_tokens mid-sentence can still contain every
+    required heading (e.g. truncation lands right after 'Board Takeaway'
+    opens but before its sentence finishes) — heading-completeness alone
+    won't catch that. This checks the very last visible character of the
+    section, so a response that ends "...the board" with no closing
+    punctuation is caught even when _is_complete_country_section() passes.
+    """
+    plain = re.sub(r"<[^>]+>", "", content).strip()
+    return bool(plain) and plain[-1] in ".!?\u201d\""
+
+
 def _extract_metadata(raw: str):
     """Splits off the ---METADATA--- {...} ---END--- block. Returns (content, metadata_dict)."""
     match = re.search(r"---METADATA---\s*(\{.*?\})\s*---END---", raw, re.DOTALL)
@@ -338,18 +484,23 @@ def build_regional_bar_url(sections: list) -> str:
         }
         for sev in SEVERITY_ORDER
     ]
+    # Horizontal, not vertical: 12 country labels crammed onto an x-axis
+    # were illegible at the width this chart actually renders in an email
+    # client (especially on mobile, where most executives read). As a
+    # horizontal bar, each country gets its own labeled row instead of a
+    # squeezed tick label, and it scales down gracefully on narrow screens.
     config = {
-        "type": "bar",
+        "type": "horizontalBar",
         "data": {"labels": labels, "datasets": datasets},
         "options": {
             "scales": {
-                "xAxes": [{"stacked": True, "ticks": {"fontColor": "#8b949e"}}],
-                "yAxes": [{"stacked": True, "ticks": {"fontColor": "#8b949e", "precision": 0}}],
+                "xAxes": [{"stacked": True, "ticks": {"fontColor": "#5a6478", "fontSize": 12, "precision": 0}}],
+                "yAxes": [{"stacked": True, "ticks": {"fontColor": "#1b2436", "fontSize": 13}}],
             },
-            "legend": {"position": "bottom", "labels": {"fontColor": "#e6edf3"}},
+            "legend": {"position": "bottom", "labels": {"fontColor": "#1b2436", "fontSize": 12}},
         },
     }
-    return _quickchart_url(config, width=640, height=280, bg="%230d1117")
+    return _quickchart_url(config, width=680, height=460, bg="white")
 
 
 # ── Agentic research loop per country ───────────────────────────────────────
@@ -359,7 +510,13 @@ def research_country(client: anthropic.Anthropic, country: dict, month: str, yea
     for _iteration in range(12):
         response = api_call_with_retry(
             client, messages, ANALYST_SYSTEM,
-            model="claude-sonnet-4-6", max_tokens=2500,
+            # 2500 was too tight for a 6-section, severity-tagged report plus
+            # the trailing metadata block — Sonnet was hitting the ceiling
+            # mid-sentence and the loop was shipping the partial text as
+            # final output. Raised back to 4000 (the previously-established
+            # budget) now that _is_complete_country_section() also exists as
+            # a backstop if a section is still ever too long to finish here.
+            model="claude-sonnet-4-6", max_tokens=4000,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
         )
 
@@ -382,9 +539,18 @@ def research_country(client: anthropic.Anthropic, country: dict, month: str, yea
         if tool_results:
             messages.append({"role": "user", "content": tool_results})
         else:
+            if response.stop_reason != "end_turn":
+                print(
+                    f"         ⚠  {country['name']} stopped early "
+                    f"(stop_reason={response.stop_reason}) — likely hit the "
+                    f"max_tokens ceiling. Output will be checked for "
+                    f"completeness and may fall back if truncated.",
+                    flush=True,
+                )
             raw = "\n".join(text_parts) if text_parts else None
             return _build_country_result(raw, country["name"], month, year)
 
+    print(f"         ⚠  {country['name']} exhausted the 12-iteration research loop without finishing.", flush=True)
     return _build_country_result(None, country["name"], month, year)
 
 
@@ -392,8 +558,20 @@ def _build_country_result(raw, country: str, month: str, year: int) -> dict:
     if not raw:
         return _fallback(country, month, year)
 
+    raw = _clean_content(raw)
     content, metadata = _extract_metadata(raw)
-    if not content.strip():
+
+    if (
+        not content.strip()
+        or not _is_complete_country_section(content)
+        or not _ends_with_terminal_punctuation(content)
+    ):
+        print(
+            f"         ⚠  {country} output was empty, incomplete (missing a "
+            f"required section), or didn't end on a finished sentence — "
+            f"using fallback content instead of shipping a truncated section.",
+            flush=True,
+        )
         return _fallback(country, month, year)
 
     return {
@@ -434,7 +612,10 @@ def _generate_regional_briefing(client: anthropic.Anthropic, sections: list):
     digest = "\n".join(digest_lines)
     prompt = regional_prompt(digest)
 
-    attempts = [("claude-haiku-4-5-20251001", 1200), ("claude-sonnet-4-6", 1200)]
+    # 1200 -> 1800: leaves headway for the 3-4 sentence synthesis paragraph,
+    # three detailed watch-list bullets, and the metadata block without
+    # crowding the regional_headline out or truncating the last bullet.
+    attempts = [("claude-haiku-4-5-20251001", 1800), ("claude-sonnet-4-6", 1800)]
     for model, max_tokens in attempts:
         try:
             response = api_call_with_retry(
@@ -442,15 +623,65 @@ def _generate_regional_briefing(client: anthropic.Anthropic, sections: list):
                 model=model, max_tokens=max_tokens, tools=None, max_retries=2,
             )
             raw = "\n".join(b.text for b in response.content if b.type == "text" and b.text.strip())
+            raw = _clean_content(raw)
             content, metadata = _extract_metadata(raw)
-            if content.strip():
+            if (
+                content.strip()
+                and _is_complete_regional_section(content)
+                and _ends_with_terminal_punctuation(content)
+            ):
                 return {"content": content, "headline": metadata.get("regional_headline", "")}
-            print(f"    ⚠  Regional briefing from {model} was empty after parsing.")
+            print(f"    ⚠  Regional briefing from {model} was empty, incomplete, or didn't end on a finished sentence.")
         except Exception as e:
             print(f"    ⚠  Regional briefing attempt failed ({model}): {e}")
 
     print("    ⚠  Regional briefing omitted — all attempts failed.")
     return None
+
+
+# ── Pre-send validation gate ─────────────────────────────────────────────────
+# Per-section checks above (_is_complete_country_section,
+# _ends_with_terminal_punctuation) catch problems with a single model
+# response. This is a second, independent layer that runs on the FULLY
+# ASSEMBLED newsletter — it catches anything that could only surface once
+# everything is stitched together (an assembly bug dropping a card,
+# duplicate leakage the per-section checks missed) rather than trusting
+# that per-section checks alone are sufficient. main.py treats a non-empty
+# result from this as a hard stop before send_newsletter() is ever called.
+LEAK_PHRASES = [
+    "i'll run", "i will run", "i now have", "let me compile", "let me now compile",
+    "now let me do", "let me search", "i'll search", "i will search",
+    "let me write the", "here is the complete", "i'll now", "let me now write",
+    "let me do one more", "i'll also", "let me also",
+]
+
+
+def validate_assembled_newsletter(html: str, sections: list, regional: dict | None) -> list[str]:
+    """Returns a list of human-readable problems; an empty list means the
+    assembled newsletter is safe to send."""
+    problems = []
+    lowered = html.lower()
+
+    for phrase in LEAK_PHRASES:
+        if phrase in lowered:
+            problems.append(f'Possible leaked process narration in assembled HTML: "{phrase}"')
+
+    if "```" in html:
+        problems.append("Leftover markdown code fence (```) found in assembled HTML.")
+    if "---metadata---" in lowered:
+        problems.append("Leftover ---METADATA--- marker found in assembled HTML.")
+    if "data-severity=" in html:
+        problems.append("Unstyled data-severity attribute leaked into assembled HTML (should have become a severity pill).")
+
+    expected_cards = len(sections)
+    actual_cards = html.count('id="country-')
+    if actual_cards != expected_cards:
+        problems.append(f"Expected {expected_cards} country cards in assembled HTML, found {actual_cards}.")
+
+    if regional and regional.get("content") and "Regional Executive Briefing" not in html:
+        problems.append("Regional briefing was generated but is missing from the assembled HTML.")
+
+    return problems
 
 
 # ── Main entry point ─────────────────────────────────────────────────────────
@@ -517,4 +748,12 @@ def generate_newsletter(month: str, year: int, country_limit: int | None = None)
         print(f"         ⚠  Infographic PDF failed, continuing without it: {e}", flush=True)
         infographic_pdf = None
 
-    return html, plain_text, headline, infographic_pdf
+    validation_problems = validate_assembled_newsletter(html, sections, regional)
+    if validation_problems:
+        print("  [Validation] ⚠  Pre-send checks found issues:", flush=True)
+        for problem in validation_problems:
+            print(f"                - {problem}", flush=True)
+    else:
+        print("  [Validation] ✓ Pre-send checks passed.", flush=True)
+
+    return html, plain_text, headline, infographic_pdf, validation_problems

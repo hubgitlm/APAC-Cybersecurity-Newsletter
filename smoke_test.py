@@ -93,6 +93,56 @@ def _fake_create(self, **kwargs):
     return _FakeResponse(REGIONAL_RAW)
 
 
+# ── Regression fixture: a canned response shaped exactly like the leak seen
+# in the July 2026 issue — leading process narration, a stray ```html fence,
+# and a truncated section (missing Board Takeaway + metadata) — so this
+# specific bug class is caught automatically before every deploy, not just
+# validated once by hand. ─────────────────────────────────────────────────
+LEAKY_TRUNCATED_RAW = """I'll run all five searches simultaneously to gather the most current \
+intelligence. I now have comprehensive, verified data. Let me compile the board-level briefing.
+
+```html
+<h3>Executive Summary</h3>
+<p>Leak/truncation regression fixture — this section is deliberately incomplete.</p>
+
+<h3>Major Incidents &amp; Breaches</h3>
+<ul>
+  <li data-severity="high"><strong>Fixture Corp</strong> — 1 Jan 2026. Incomplete on purpose.</li>
+</ul>
+"""
+
+
+def _test_clean_content_and_completeness_checks() -> dict:
+    """Unit-level check on the parsing helpers directly (no API stub
+    involved) — verifies the specific leak pattern from the July issue is
+    stripped, and that a truncated (missing-headings) section is correctly
+    rejected rather than shipped."""
+    import generate_newsletter as gn
+
+    checks = {}
+
+    cleaned = gn._clean_content(LEAKY_TRUNCATED_RAW)
+    checks["_clean_content strips leading process narration"] = "I'll run" not in cleaned
+    checks["_clean_content strips ```html code fence"] = "```" not in cleaned
+    checks["_clean_content output starts with <h3>"] = cleaned.startswith("<h3")
+
+    checks["_is_complete_country_section rejects truncated (missing headings) content"] = (
+        gn._is_complete_country_section(cleaned) is False
+    )
+    checks["_is_complete_country_section accepts a full canned section"] = (
+        gn._is_complete_country_section(gn._clean_content(COUNTRY_RAW)) is True
+    )
+
+    # End-to-end: a leaky/truncated raw response must produce fallback
+    # content, not the leaked preamble or the incomplete section text.
+    result = gn._build_country_result(LEAKY_TRUNCATED_RAW, "Fixture Country", "July", 2026)
+    checks["leaky/truncated raw response falls back instead of shipping partial content"] = (
+        "I'll run" not in result["content"] and "Fixture Corp" not in result["content"]
+    )
+
+    return checks
+
+
 def _report(checks: dict) -> bool:
     print("\n=== SMOKE TEST RESULTS (zero API cost) ===")
     all_pass = True
@@ -146,12 +196,30 @@ def run():
         checks["infographic PDF is a reasonable size (>1KB)"] = len(pdf_bytes) > 1000
         os.remove(written_pdf[0])
 
+    # ── Regression checks for the leaked-preamble / truncation bug class ──
+    checks.update(_test_clean_content_and_completeness_checks())
+
     checks["all 12 country cards rendered"] = html.count('id="country-') == 12
     checks["no leftover data-severity attributes"] = "data-severity" not in html
     checks["no leftover ---METADATA--- markers"] = "---METADATA---" not in html
-    checks["severity pill styling present"] = "background-color:#f85149" in html
+    checks["severity pill styling present"] = "background-color:#a13529" in html
     checks["regional briefing section present"] = "Regional Executive Briefing" in html
     checks["at least one QuickChart image URL present"] = "quickchart.io/chart?c=" in html
+
+    # ── Pre-send validation gate: a clean smoke run must pass with zero
+    # problems, and the gate itself must correctly flag a deliberately
+    # broken assembled HTML (leak phrase + code fence + mismatched card
+    # count) rather than silently pass anything through. ──────────────────
+    import generate_newsletter as gn
+    clean_problems = gn.validate_assembled_newsletter(html, sections=[{}] * 12, regional={"content": "x"})
+    checks["clean assembled newsletter passes pre-send validation"] = clean_problems == []
+
+    broken_html = (
+        html.replace('id="country-', 'id="dropped-', 1)  # simulate a missing card
+        + "\n<!-- I'll run all five searches simultaneously -->\n```html\n---METADATA---\n"
+    )
+    broken_problems = gn.validate_assembled_newsletter(broken_html, sections=[{}] * 12, regional={"content": "x"})
+    checks["pre-send validation catches a deliberately broken assembled newsletter"] = len(broken_problems) >= 3
 
     ok = _report(checks)
     sys.exit(0 if ok else 1)

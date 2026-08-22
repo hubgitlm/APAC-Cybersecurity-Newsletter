@@ -91,7 +91,9 @@ def main():
     month, year = get_previous_month()
     print(f"\n📅  Generating newsletter for: {month} {year}\n")
 
-    html, plain_text, headline, infographic_pdf = generate_newsletter(month, year, country_limit=country_limit)
+    html, plain_text, headline, infographic_pdf, validation_problems = generate_newsletter(
+        month, year, country_limit=country_limit
+    )
 
     suffix = f"_partial{country_limit}" if country_limit else ""
     output_path = f"newsletter_{month.lower()}_{year}{suffix}.html"
@@ -107,6 +109,23 @@ def main():
         print(f"✅  Infographic snapshot saved to {pdf_filename}")
     else:
         print("⚠  No infographic snapshot was generated this run — email will send without a PDF attachment.")
+
+    # ── Pre-send validation gate ──────────────────────────────────────────
+    # The HTML/PDF above are still written to disk (and still uploaded as a
+    # GitHub Actions artifact by the workflow's `if: always()` step) so a
+    # failed run is always inspectable — but we stop here, before
+    # send_newsletter() is ever called, rather than mail known-broken
+    # content to real subscribers. This applies on dry runs too, so local
+    # testing catches the same problems CI would.
+    if validation_problems:
+        print("\n🛑  PRE-SEND VALIDATION FAILED — the assembled newsletter has issues:")
+        for problem in validation_problems:
+            print(f"     - {problem}")
+        print("\n    Stopping before any email is sent. Inspect the saved HTML/PDF above,")
+        print("    fix the underlying issue, and re-run.")
+        sys.exit(1)
+
+    print("\n✅  Pre-send validation passed — content is safe to send.")
 
     if dry_run:
         print("\n⏭  Dry run complete — skipping email send.")
